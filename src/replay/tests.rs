@@ -308,7 +308,6 @@ async fn answer(replayer: &mut Replayer, batch: &[Frontend]) -> (Bytes, Duration
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn answers_parse_bind_describe_execute_and_sync() {
     let columns = description(&[("t", TEXT, 0)]);
     let answer_rows = rows(&["a", "b"], "SELECT 2");
@@ -352,7 +351,6 @@ async fn answers_parse_bind_describe_execute_and_sync() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn executes_the_statement_a_bind_names_in_the_portal_it_names() {
     let columns = description(&[("t", TEXT, 0)]);
     let (one, two) = (rows(&["1"], "SELECT 1"), rows(&["2"], "SELECT 1"));
@@ -387,7 +385,6 @@ async fn executes_the_statement_a_bind_names_in_the_portal_it_names() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn falls_back_to_the_result_formats_when_parameters_differ() {
     let columns = description(&[("t", TEXT, 0)]);
     let (first, second) = (rows(&["a"], "SELECT 1"), rows(&["b"], "SELECT 1"));
@@ -429,7 +426,6 @@ const SET_CONFIG: &str = "select set_config('request.jwt.claims', $1, true)";
 const IGNORING_SET_CONFIG: &str = "ignore_parameters = ['select set_config(']";
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn a_statement_that_ignores_its_parameters_gets_the_recorded_answer() {
     let columns = description(&[("set_config", TEXT, 0)]);
     let answer_rows = rows(&["{}"], "SELECT 1");
@@ -462,7 +458,6 @@ async fn a_statement_that_ignores_its_parameters_gets_the_recorded_answer() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn a_statement_without_a_matching_prefix_still_counts_a_fallback() {
     let columns = description(&[("t", TEXT, 0)]);
     let (config_rows, first) = (rows(&["{}"], "SELECT 1"), rows(&["a"], "SELECT 1"));
@@ -488,7 +483,6 @@ async fn a_statement_without_a_matching_prefix_still_counts_a_fallback() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn a_statement_that_ignores_its_parameters_is_still_a_miss_without_a_recording() {
     let columns = description(&[("set_config", TEXT, 0)]);
     let loaded = try_load(
@@ -542,7 +536,6 @@ async fn a_statement_that_ignores_its_parameters_is_still_a_miss_without_a_recor
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn a_miss_is_an_error_and_skips_to_the_sync() {
     let loaded = load(&[startup(), command("select 1", complete("SELECT 0"))]);
     let mut replayer = loaded.replayer().await;
@@ -571,7 +564,6 @@ async fn a_miss_is_an_error_and_skips_to_the_sync() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn a_bind_without_a_recording_is_a_miss() {
     let loaded = load(&[startup(), command("select 1", complete("SELECT 0"))]);
     let mut replayer = loaded.replayer().await;
@@ -595,7 +587,6 @@ async fn a_bind_without_a_recording_is_a_miss() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn skips_messages_up_to_the_sync_even_across_batches() {
     let loaded = load(&[startup(), command("select 1", complete("SELECT 0"))]);
     let mut replayer = loaded.replayer().await;
@@ -610,7 +601,6 @@ async fn skips_messages_up_to_the_sync_even_across_batches() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn truncates_the_sql_of_a_miss() {
     let loaded = load(&[startup()]);
     let mut replayer = loaded.replayer().await;
@@ -622,7 +612,6 @@ async fn truncates_the_sql_of_a_miss() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn an_error_in_the_batch_skips_what_follows_it() {
     let boom = failure("22012", "division by zero");
     let loaded = load(&[
@@ -649,7 +638,6 @@ async fn an_error_in_the_batch_skips_what_follows_it() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn follows_the_transaction_status_of_extended_statements() {
     let loaded = load(&[
         startup(),
@@ -679,7 +667,6 @@ async fn follows_the_transaction_status_of_extended_statements() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn follows_the_transaction_status_of_simple_queries() {
     let loaded = load(&[
         startup(),
@@ -701,7 +688,6 @@ async fn follows_the_transaction_status_of_simple_queries() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn an_error_in_a_transaction_fails_it_until_it_ends() {
     let boom = failure("22012", "division by zero");
     let loaded = load(&[
@@ -751,7 +737,6 @@ async fn an_error_in_a_transaction_fails_it_until_it_ends() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn a_failed_transaction_rejects_simple_queries_until_it_ends() {
     let boom = failure("22012", "division by zero");
     let loaded = load(&[
@@ -780,7 +765,6 @@ async fn a_failed_transaction_rejects_simple_queries_until_it_ends() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn a_multi_statement_query_ends_in_the_status_of_its_last_statement() {
     let started = concat(&[&complete("BEGIN"), &rows(&["1"], "SELECT 1")]);
     let failed = concat(&[&complete("BEGIN"), &failure("22012", "division by zero")]);
@@ -803,7 +787,6 @@ async fn a_multi_statement_query_ends_in_the_status_of_its_last_statement() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn an_empty_query_is_an_empty_query_response() {
     let loaded = load(&[startup()]);
     let mut replayer = loaded.replayer().await;
@@ -819,7 +802,6 @@ async fn an_empty_query_is_an_empty_query_response() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn describes_a_statement_by_its_parameter_types() {
     let response = concat(&[
         &encode(|out| put(out, &ParameterDescription::new(vec![TEXT]))),
@@ -858,7 +840,6 @@ async fn describes_a_statement_by_its_parameter_types() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn closes_statements_and_portals() {
     let loaded = load(&[startup(), command("select 1", complete("SELECT 0"))]);
     let mut replayer = loaded.replayer().await;
@@ -885,7 +866,6 @@ async fn closes_statements_and_portals() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay lets a named statement be parsed again without a Close"]
 async fn a_named_statement_must_be_closed_before_it_is_parsed_again() {
     let loaded = load(&[
         startup(),
@@ -942,7 +922,6 @@ async fn a_named_statement_must_be_closed_before_it_is_parsed_again() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn the_unnamed_statement_is_replaced_without_a_close() {
     let loaded = load(&[
         startup(),
@@ -966,7 +945,6 @@ async fn the_unnamed_statement_is_replaced_without_a_close() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn refuses_copy() {
     let loaded = load(&[startup()]);
     let mut replayer = loaded.replayer().await;
@@ -1006,7 +984,6 @@ fn override_body(bytes: usize) -> String {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn overrides_a_text_column_with_json_of_the_configured_size() {
     let columns = description(&[("id", INT4, 0), ("body", JSON, 0)]);
     let recorded = table(
@@ -1044,7 +1021,6 @@ async fn overrides_a_text_column_with_json_of_the_configured_size() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn an_override_is_at_least_the_minimal_json() {
     let columns = description(&[("body", TEXT, 0)]);
     let loaded = try_load(
@@ -1060,7 +1036,6 @@ async fn an_override_is_at_least_the_minimal_json() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn overrides_a_binary_jsonb_column_with_its_version_byte() {
     let columns = description(&[("body", JSONB, 1)]);
     let loaded = try_load(
@@ -1084,7 +1059,6 @@ async fn overrides_a_binary_jsonb_column_with_its_version_byte() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn overrides_binary_text_columns_as_utf8() {
     for type_id in [TEXT, VARCHAR, JSON, UNKNOWN] {
         let columns = description(&[("body", type_id, 1)]);
@@ -1113,7 +1087,6 @@ async fn overrides_binary_text_columns_as_utf8() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn refuses_to_override_a_binary_column_of_another_type() {
     let columns = description(&[("id", INT4, 0), ("body", INT4, 1)]);
     let recorded = table(&[&[Some(b"1"), Some(&[0, 0, 0, 1])]], "SELECT 1");
@@ -1130,7 +1103,6 @@ async fn refuses_to_override_a_binary_column_of_another_type() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn scales_execution_times() {
     let loaded = load(&[
         startup(),
@@ -1214,7 +1186,6 @@ fn executions(sql: &str, times: usize) -> Vec<Frontend> {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn a_constant_model_gives_every_statement_its_median() {
     let loaded = try_load(
         &latency_recording(100),
@@ -1235,7 +1206,6 @@ async fn a_constant_model_gives_every_statement_its_median() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn a_model_with_a_p99_varies_the_time_of_statements() {
     let loaded = try_load(
         &latency_recording(100),
@@ -1252,7 +1222,6 @@ async fn a_model_with_a_p99_varies_the_time_of_statements() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn execution_per_mib_adds_time_by_the_size_of_the_answer() {
     const MIB: usize = 1024 * 1024;
     let loaded = try_load(
@@ -1282,7 +1251,6 @@ async fn execution_per_mib_adds_time_by_the_size_of_the_answer() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn a_statements_time_is_recorded_scaled_plus_modelled_plus_per_mib() {
     const MIB: usize = 1024 * 1024;
     let loaded = try_load(
@@ -1308,7 +1276,6 @@ async fn a_statements_time_is_recorded_scaled_plus_modelled_plus_per_mib() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn execution_times_are_log_normal_with_the_configured_median_and_p99() {
     let loaded = try_load(
         &latency_recording(100),
@@ -1334,7 +1301,6 @@ async fn execution_times_are_log_normal_with_the_configured_median_and_p99() {
 }
 
 #[test]
-#[ignore = "xfail: replay is not implemented yet"]
 fn a_recording_without_a_startup_entry_fails_to_load() {
     let error = try_load(&[command("select 1", complete("SELECT 0"))], "")
         .err()
@@ -1343,7 +1309,6 @@ fn a_recording_without_a_startup_entry_fails_to_load() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn connecting_takes_a_recorded_start_time() {
     let loaded = load(&[Entry::Startup {
         parameters: vec![("TimeZone".into(), "UTC".into())],
@@ -1359,7 +1324,6 @@ async fn connecting_takes_a_recorded_start_time() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn a_cancelled_batch_is_an_error_and_a_ready_for_query() {
     let loaded = load(&[startup(), command("begin", complete("BEGIN"))]);
     let mut replayer = loaded.replayer().await;
@@ -1379,7 +1343,6 @@ async fn a_cancelled_batch_is_an_error_and_a_ready_for_query() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay answers the cancel of a Flush batch with a ReadyForQuery"]
 async fn a_cancelled_flush_batch_is_an_error_and_skips_to_the_sync() {
     let loaded = load(&[startup(), command("select 1", complete("SELECT 1"))]);
     let mut replayer = loaded.replayer().await;
@@ -1414,7 +1377,6 @@ async fn a_cancelled_flush_batch_is_an_error_and_skips_to_the_sync() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: replay is not implemented yet"]
 async fn a_cancelled_batch_ends_in_a_ready_for_query_when_the_batch_did() {
     let loaded = load(&[
         startup(),
