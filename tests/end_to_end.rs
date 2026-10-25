@@ -1,0 +1,531 @@
+//! Black-box test of the binary: what a client's traffic gets from a real
+//! PostgreSQL in record mode, thousands of connections over hundreds of
+//! virtual databases get again in replay mode, without PostgreSQL.
+//!
+//! It starts a throwaway cluster, so it needs `initdb` and `pg_ctl` on PATH
+//! (`nix-shell` has them) and passes without doing anything otherwise.
+
+use std::{
+    fs,
+    net::{Ipv4Addr, SocketAddr, TcpListener as StdListener},
+    path::{Path, PathBuf},
+    process::{Child, Command, ExitStatus, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
+use hmac::{Hmac, KeyInit, Mac};
+use sha2::Sha256;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+    task::JoinSet,
+    time::sleep,
+};
+use tokio_postgres::{Client, NoTls, SimpleQueryMessage};
+
+const SECRET: &str = "end-to-end secret";
+const USER: &str = "app";
+const DATABASES: usize = 500;
+const CONNECTIONS: usize = 2000;
+/// Connections made at once. The listener's accept queue is capped at 128 on
+/// macOS, and the clients' SCRAM hashing is what takes the time anyway.
+const BURST: usize = 50;
+/// How often every connection repeats the reading statements.
+const ROUNDS: usize = 3;
+const STARTUP: Duration = Duration::from_secs(10);
+
+const SCHEMA: &str = "
+    CREATE TABLE items (id serial PRIMARY KEY, name text NOT NULL, price numeric(10, 2) NOT NULL);
+    INSERT INTO items (name, price) VALUES ('apple', 1.50), ('banana', 0.25), ('cherry', 12.00);
+    CREATE TABLE audit (id serial PRIMARY KEY, note text NOT NULL);";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn replays_what_postgres_answered_to_thousands_of_connections() {
+    if Command::new("initdb").arg("--version").output().is_err() {
+        eprintln!("initdb is not on PATH: skipping the end-to-end test (run it in nix-shell)");
+        return;
+    }
+    // A connection is a file descriptor here as well as in the server.
+    let _ = rlimit::increase_nofile_limit(u64::MAX);
+
+    let dir = std::env::temp_dir().join(format!("pseudogress-e2e-{}", std::process::id()));
+    // Declared first, so that it is dropped last: after the processes that
+    // use the directory are gone.
+    let postgres = Postgres::start(&dir);
+    postgres.createdb("app");
+    postgres.psql("app", SCHEMA);
+
+    let recording = dir.join("app.jsonl");
+    let config = dir.join("pseudogress.toml");
+    fs::write(
+        &config,
+        format!(
+            r#"listen = ["127.0.0.1:0"]
+admin = "127.0.0.1:0"
+secret = "{SECRET}"
+
+[[class]]
+name = "app"
+databases = "app-*"
+users = ["{USER}"]
+recording = "{recording}"
+upstream = {{ host = "127.0.0.1", port = {postgres_port}, user = "postgres", database = "app" }}
+"#,
+            recording = recording.display(),
+            postgres_port = postgres.port
+        ),
+    )
+    .unwrap();
+
+    let mut record = Pseudogress::spawn("record", &config, &dir.join("record.log"));
+    let (listen, _) = record.wait_until_listening();
+    let recorded = workload(listen.port(), "app-0").await;
+    // PostgreSQL's own answers, so that a replay can't pass by matching a
+    // recording of failures.
+    assert_eq!(
+        recorded,
+        Answers {
+            reads: vec![
+                "1|apple|1.50;3|cherry|12.00".to_owned(),
+                "3|apple,banana,cherry".to_owned(),
+                "22012 division by zero".to_owned(),
+            ],
+            transaction: "1|seen".to_owned(),
+        }
+    );
+    let status = record.terminate();
+    assert!(
+        status.success(),
+        "record mode exited with {status}:\n{}",
+        record.stderr()
+    );
+    assert!(
+        fs::metadata(&recording).is_ok_and(|file| file.len() > 0),
+        "record mode wrote no recording:\n{}",
+        record.stderr()
+    );
+
+    let mut replay = Pseudogress::spawn("replay", &config, &dir.join("replay.log"));
+    let (listen, admin) = replay.wait_until_listening();
+    assert_eq!(workload(listen.port(), "app-0").await, recorded);
+
+    // Every connection is open at once, and all of them read at once.
+    let clients = connect_all(listen.port()).await;
+    wait_for_metric(admin, "pseudogress_connections", CONNECTIONS as i64).await;
+    let mut reading = JoinSet::new();
+    for (database, client) in clients {
+        let expected = recorded.reads.clone();
+        reading.spawn(async move {
+            for _ in 0..ROUNDS {
+                assert_eq!(reads(&client).await, expected, "answers in {database}");
+            }
+            client
+        });
+    }
+    let mut open = Vec::with_capacity(CONNECTIONS);
+    while let Some(done) = reading.join_next().await {
+        open.push(done.unwrap());
+    }
+    assert_eq!(metric(admin, "pseudogress_misses_total").await, 0);
+
+    drop(open);
+    wait_for_metric(admin, "pseudogress_connections", 0).await;
+}
+
+/// What a client got from the statements of the workload.
+#[derive(Debug, PartialEq)]
+struct Answers {
+    reads: Vec<String>,
+    transaction: String,
+}
+
+/// Runs the workload on one connection to `database`.
+async fn workload(port: u16, database: &str) -> Answers {
+    let mut client = connect(port, database).await;
+    let reads = reads(&client).await;
+    // After the failed statement, so that it shows the connection still works.
+    let transaction = transaction(&mut client).await;
+    Answers { reads, transaction }
+}
+
+/// The statements that don't change anything, with their answers as text:
+/// a prepared one with parameters, a simple query, and one that fails.
+async fn reads(client: &Client) -> Vec<String> {
+    let statement = client
+        .prepare(
+            "SELECT id, name, price::text FROM items WHERE id >= $1 AND name <> $2 ORDER BY id",
+        )
+        .await
+        .unwrap();
+    let rows = client
+        .query(&statement, &[&1_i32, &"banana"])
+        .await
+        .unwrap();
+    let items: Vec<String> = rows
+        .iter()
+        .map(|row| {
+            format!(
+                "{}|{}|{}",
+                row.get::<_, i32>(0),
+                row.get::<_, &str>(1),
+                row.get::<_, &str>(2)
+            )
+        })
+        .collect();
+
+    let messages = client
+        .simple_query("SELECT count(*), string_agg(name, ',' ORDER BY name) FROM items")
+        .await
+        .unwrap();
+    let summary: Vec<String> = messages
+        .iter()
+        .filter_map(|message| match message {
+            SimpleQueryMessage::Row(row) => Some(format!(
+                "{}|{}",
+                row.get(0).unwrap_or_default(),
+                row.get(1).unwrap_or_default()
+            )),
+            _ => None,
+        })
+        .collect();
+
+    // Fails when it runs, not when it is prepared.
+    let statement = client
+        .prepare("SELECT id / $1::int FROM items")
+        .await
+        .unwrap();
+    let error = client.query(&statement, &[&0_i32]).await.unwrap_err();
+    let error = error.as_db_error().expect("a database error");
+
+    vec![
+        items.join(";"),
+        summary.join(";"),
+        format!("{} {}", error.code().code(), error.message()),
+    ]
+}
+
+async fn transaction(client: &mut Client) -> String {
+    let transaction = client.transaction().await.unwrap();
+    let row = transaction
+        .query_one(
+            "INSERT INTO audit (note) VALUES ($1) RETURNING id, note",
+            &[&"seen"],
+        )
+        .await
+        .unwrap();
+    transaction.commit().await.unwrap();
+    format!("{}|{}", row.get::<_, i32>(0), row.get::<_, &str>(1))
+}
+
+/// Opens `CONNECTIONS` connections, `DATABASES` databases' worth, and keeps
+/// them open.
+async fn connect_all(port: u16) -> Vec<(String, Client)> {
+    let mut clients = Vec::with_capacity(CONNECTIONS);
+    for first in (0..CONNECTIONS).step_by(BURST) {
+        let mut connecting = JoinSet::new();
+        for n in first..first + BURST {
+            let database = format!("app-{}", n % DATABASES);
+            connecting.spawn(async move {
+                let client = connect(port, &database).await;
+                (database, client)
+            });
+        }
+        while let Some(done) = connecting.join_next().await {
+            clients.push(done.unwrap());
+        }
+    }
+    clients
+}
+
+async fn connect(port: u16, database: &str) -> Client {
+    let mut config = tokio_postgres::Config::new();
+    config
+        .host("127.0.0.1")
+        .port(port)
+        .user(USER)
+        .dbname(database)
+        .password(derived_password(database));
+    let (client, connection) = config
+        .connect(NoTls)
+        .await
+        .unwrap_or_else(|error| panic!("connecting to {database}: {error}"));
+    // Ends when the client is dropped.
+    tokio::spawn(connection);
+    client
+}
+
+/// What `auth::derive_password` documents: the hex of the HMAC-SHA-256 of
+/// the database, a zero byte and the user, keyed with the secret.
+fn derived_password(database: &str) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(SECRET.as_bytes()).unwrap();
+    mac.update(database.as_bytes());
+    mac.update(&[0]);
+    mac.update(USER.as_bytes());
+    mac.finalize()
+        .into_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// A request to the admin API, as a client without an HTTP library makes it.
+async fn admin_get(admin: SocketAddr, path: &str) -> String {
+    let mut stream = TcpStream::connect(admin).await.unwrap();
+    let request = format!("GET {path} HTTP/1.1\r\nHost: {admin}\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).await.unwrap();
+    let (head, body) = response.split_once("\r\n\r\n").expect("an HTTP response");
+    assert!(head.starts_with("HTTP/1.1 200"), "GET {path}: {head}");
+    body.to_owned()
+}
+
+/// The value of a metric of the class `app`.
+async fn metric(admin: SocketAddr, name: &str) -> i64 {
+    let body = admin_get(admin, "/metrics").await;
+    let prefix = format!("{name}{{class=\"app\"}} ");
+    body.lines()
+        .find_map(|line| line.strip_prefix(&prefix))
+        .unwrap_or_else(|| panic!("no {name} in the metrics:\n{body}"))
+        .parse()
+        .unwrap()
+}
+
+/// The server counts a connection only after it answered the client, and a
+/// closed one when it notices, so a gauge takes a moment to show either.
+async fn wait_for_metric(admin: SocketAddr, name: &str, value: i64) {
+    let mut seen = metric(admin, name).await;
+    for _ in 0..200 {
+        if seen == value {
+            return;
+        }
+        sleep(Duration::from_millis(50)).await;
+        seen = metric(admin, name).await;
+    }
+    panic!("{name} is {seen}, not {value}");
+}
+
+/// A port nobody listens on. PostgreSQL can't be told to pick one, so a port
+/// taken before PostgreSQL binds it is a lost race, which `Postgres::start`
+/// retries.
+fn free_port() -> u16 {
+    StdListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// Runs a PostgreSQL tool, which has to succeed.
+fn run(command: &mut Command) {
+    if let Err(error) = try_run(command) {
+        panic!("{error}");
+    }
+}
+
+/// Runs a PostgreSQL tool, and says how it failed.
+fn try_run(command: &mut Command) -> Result<(), String> {
+    let output = command
+        .output()
+        .unwrap_or_else(|error| panic!("{command:?}: {error}"));
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "{command:?} failed with {}:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    ))
+}
+
+/// A throwaway cluster, stopped and deleted along with its directory when
+/// dropped.
+struct Postgres {
+    dir: PathBuf,
+    /// The port it started on.
+    port: u16,
+}
+
+impl Postgres {
+    fn start(dir: &Path) -> Postgres {
+        fs::create_dir_all(dir).unwrap();
+        // Made before the cluster, so that a failed start is cleaned up too.
+        let mut postgres = Postgres {
+            dir: dir.to_owned(),
+            port: 0,
+        };
+        run(Command::new("initdb")
+            .env("LC_ALL", "C")
+            .arg("-D")
+            .arg(postgres.data())
+            .args([
+                "-U",
+                "postgres",
+                "--auth=trust",
+                "--no-locale",
+                "-E",
+                "UTF8",
+            ]));
+        // No Unix socket: macOS limits the path of one to 103 bytes. The log
+        // keeps the server from holding the pipes of `try_run` open.
+        let mut started = Ok(());
+        for _ in 0..5 {
+            postgres.port = free_port();
+            started = try_run(
+                Command::new("pg_ctl")
+                    .args(["-w", "-D"])
+                    .arg(postgres.data())
+                    .arg("-l")
+                    .arg(dir.join("postgres.log"))
+                    .arg("-o")
+                    .arg(format!(
+                        "-p {} -c listen_addresses=127.0.0.1 -c unix_socket_directories=",
+                        postgres.port
+                    ))
+                    .arg("start"),
+            );
+            if started.is_ok() {
+                break;
+            }
+        }
+        if let Err(error) = started {
+            panic!("{error}");
+        }
+        postgres
+    }
+
+    fn data(&self) -> PathBuf {
+        self.dir.join("postgres")
+    }
+
+    fn createdb(&self, name: &str) {
+        run(Command::new("createdb")
+            .args(self.connection_arguments())
+            .arg(name));
+    }
+
+    fn psql(&self, database: &str, sql: &str) {
+        run(Command::new("psql")
+            .args([
+                "-X",
+                "-q",
+                "-v",
+                "ON_ERROR_STOP=1",
+                "-d",
+                database,
+                "-c",
+                sql,
+            ])
+            .args(self.connection_arguments()));
+    }
+
+    fn connection_arguments(&self) -> [String; 6] {
+        [
+            "-h".to_owned(),
+            "127.0.0.1".to_owned(),
+            "-p".to_owned(),
+            self.port.to_string(),
+            "-U".to_owned(),
+            "postgres".to_owned(),
+        ]
+    }
+}
+
+impl Drop for Postgres {
+    fn drop(&mut self) {
+        // Nothing in the cluster is worth a clean shutdown. Failing is fine
+        // when it never started.
+        let _ = Command::new("pg_ctl")
+            .args(["-m", "immediate", "-D"])
+            .arg(self.data())
+            .arg("stop")
+            .output();
+        let _ = fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// The address pseudogress announced on its stderr for `what`, once bound.
+fn announced(stderr: &str, what: &str) -> Option<SocketAddr> {
+    let prefix = format!("pseudogress: {what} on ");
+    stderr
+        .lines()
+        .find_map(|line| line.strip_prefix(&prefix)?.parse().ok())
+}
+
+/// A running pseudogress, killed when dropped, so that a failing test leaves
+/// none behind.
+struct Pseudogress {
+    child: Child,
+    stderr: PathBuf,
+}
+
+impl Pseudogress {
+    fn spawn(mode: &str, config: &Path, stderr: &Path) -> Pseudogress {
+        let child = Command::new(env!("CARGO_BIN_EXE_pseudogress"))
+            .args([mode])
+            .arg(config)
+            .stdout(Stdio::null())
+            .stderr(fs::File::create(stderr).unwrap())
+            .spawn()
+            .unwrap();
+        Pseudogress {
+            child,
+            stderr: stderr.to_owned(),
+        }
+    }
+
+    /// What it printed to stderr, for the message of a failure.
+    fn stderr(&self) -> String {
+        fs::read_to_string(&self.stderr).unwrap_or_default()
+    }
+
+    /// Waits for the PostgreSQL listener and the admin API to be bound, and
+    /// returns their addresses, which are the ones of this process.
+    fn wait_until_listening(&mut self) -> (SocketAddr, SocketAddr) {
+        let deadline = Instant::now() + STARTUP;
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                panic!("pseudogress exited with {status}:\n{}", self.stderr());
+            }
+            let stderr = self.stderr();
+            if let (Some(listen), Some(admin)) = (
+                announced(&stderr, "PostgreSQL"),
+                announced(&stderr, "admin API"),
+            ) {
+                return (listen, admin);
+            }
+            assert!(
+                Instant::now() < deadline,
+                "pseudogress does not announce its addresses:\n{stderr}"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Sends SIGTERM, which has record mode write its recordings, and waits
+    /// for the exit.
+    fn terminate(&mut self) -> ExitStatus {
+        let sent = unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) };
+        assert_eq!(sent, 0, "{}", std::io::Error::last_os_error());
+        let deadline = Instant::now() + STARTUP;
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                return status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "pseudogress did not exit after SIGTERM:\n{}",
+                self.stderr()
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+impl Drop for Pseudogress {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
