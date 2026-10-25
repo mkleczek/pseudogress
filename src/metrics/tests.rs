@@ -59,7 +59,6 @@ fn value(out: &str, prefix: &str) -> u64 {
 }
 
 #[test]
-#[ignore = "xfail: metrics is not implemented yet"]
 fn buckets_are_powers_of_two_of_nanoseconds() {
     assert_eq!(bucket_of(Duration::ZERO), 0);
     assert_eq!(bucket_of(Duration::from_nanos(1)), 0);
@@ -75,16 +74,14 @@ fn buckets_are_powers_of_two_of_nanoseconds() {
 }
 
 #[test]
-#[ignore = "xfail: metrics is not implemented yet"]
 fn sums_recorded_durations() {
     let histogram = Histogram::default();
     histogram.record(Duration::from_micros(1));
     histogram.record(Duration::from_secs(5));
-    assert_eq!(histogram.sum_nanos.load(Relaxed), 5_001_000);
+    assert_eq!(histogram.sum_nanos.load(Relaxed), 5_000_001_000);
 }
 
 #[test]
-#[ignore = "xfail: metrics is not implemented yet"]
 fn renders_each_metric_once_with_a_sample_per_class() {
     let classes = load_classes(CONFIG);
     let (small, large) = (&classes[0].metrics, &classes[1].metrics);
@@ -138,7 +135,6 @@ fn renders_each_metric_once_with_a_sample_per_class() {
 }
 
 #[test]
-#[ignore = "xfail: render does not know the lateness histogram yet"]
 fn renders_the_lateness_histogram_apart_from_processing() {
     let classes = load_classes(CONFIG);
     classes[0]
@@ -167,7 +163,6 @@ fn renders_the_lateness_histogram_apart_from_processing() {
 }
 
 #[test]
-#[ignore = "xfail: metrics is not implemented yet"]
 fn histogram_buckets_are_cumulative_and_end_at_the_count() {
     let classes = load_classes(CONFIG);
     let histogram = &classes[0].metrics.processing;
@@ -185,6 +180,12 @@ fn histogram_buckets_are_cumulative_and_end_at_the_count() {
         .map(|line| line.rsplit_once(' ').unwrap().1.parse().unwrap())
         .collect();
     assert_eq!(buckets.len(), 32, "31 finite buckets and +Inf");
+    for line in [
+        r#"pseudogress_processing_seconds_bucket{class="small",le="0.000000002"} 1"#,
+        r#"pseudogress_processing_seconds_bucket{class="small",le="2.147483648"} 4"#,
+    ] {
+        assert!(out.lines().any(|l| l == line), "{line} in:\n{out}");
+    }
     assert!(
         buckets.windows(2).all(|pair| pair[0] <= pair[1]),
         "{buckets:?}"
@@ -199,7 +200,6 @@ fn histogram_buckets_are_cumulative_and_end_at_the_count() {
 }
 
 #[test]
-#[ignore = "xfail: metrics is not implemented yet"]
 fn escapes_label_values() {
     let classes = load_classes(
         r#"
