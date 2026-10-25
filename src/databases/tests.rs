@@ -66,7 +66,6 @@ fn class_target(name: &str, fraction: f64) -> Target {
 }
 
 #[test]
-#[ignore = "xfail: databases is not implemented yet"]
 fn a_prefix_pattern_matches_names_that_start_with_it() {
     let databases = registry(&[("small", "small-*", None)]);
     for name in ["small-", "small-1", "small-1-x"] {
@@ -78,7 +77,6 @@ fn a_prefix_pattern_matches_names_that_start_with_it() {
 }
 
 #[test]
-#[ignore = "xfail: databases is not implemented yet"]
 fn a_suffix_pattern_matches_names_that_end_with_it() {
     let databases = registry(&[("primary", "*-primary", None)]);
     for name in ["-primary", "a-primary", "a-b-primary"] {
@@ -90,7 +88,6 @@ fn a_suffix_pattern_matches_names_that_end_with_it() {
 }
 
 #[test]
-#[ignore = "xfail: databases is not implemented yet"]
 fn a_pattern_with_a_star_inside_matches_both_ends() {
     let databases = registry(&[("ab", "a*b", None)]);
     for name in ["ab", "a-b", "aXXb", "abb", "aab"] {
@@ -102,7 +99,6 @@ fn a_pattern_with_a_star_inside_matches_both_ends() {
 }
 
 #[test]
-#[ignore = "xfail: databases is not implemented yet"]
 fn a_pattern_with_several_stars_finds_its_parts_in_order() {
     let databases = registry(&[("abc", "a*b*c", None)]);
     for name in ["abc", "a-b-c", "abbc", "aabcc"] {
@@ -114,7 +110,6 @@ fn a_pattern_with_several_stars_finds_its_parts_in_order() {
 }
 
 #[test]
-#[ignore = "xfail: databases is not implemented yet"]
 fn the_parts_of_a_pattern_do_not_overlap() {
     let databases = registry(&[("ends", "ab*ba", None), ("middle", "*aa*aa*", None)]);
     assert!(!connects(&databases, "aba"));
@@ -124,7 +119,6 @@ fn the_parts_of_a_pattern_do_not_overlap() {
 }
 
 #[test]
-#[ignore = "xfail: databases is not implemented yet"]
 fn a_pattern_without_a_star_matches_exactly() {
     let databases = registry(&[("exact", "a.b", None)]);
     assert!(connects(&databases, "a.b"));
@@ -134,7 +128,6 @@ fn a_pattern_without_a_star_matches_exactly() {
 }
 
 #[test]
-#[ignore = "xfail: databases is not implemented yet"]
 fn a_lone_star_matches_every_name() {
     let databases = any();
     for name in ["", "a", "a*b", "any name at all"] {
@@ -143,7 +136,6 @@ fn a_lone_star_matches_every_name() {
 }
 
 #[test]
-#[ignore = "xfail: databases is not implemented yet"]
 fn the_first_class_that_matches_wins() {
     let databases = registry(&[("first", "a*", None), ("second", "*", None)]);
     assert_eq!(connect(&databases, "abc").class(), 0);
@@ -154,7 +146,6 @@ fn the_first_class_that_matches_wins() {
 }
 
 #[test]
-#[ignore = "xfail: databases is not implemented yet"]
 fn a_name_that_matches_no_class_does_not_exist() {
     let databases = registry(&[("small", "small-*", None)]);
     assert_eq!(
@@ -165,7 +156,6 @@ fn a_name_that_matches_no_class_does_not_exist() {
 }
 
 #[test]
-#[ignore = "xfail: databases is not implemented yet"]
 fn max_connections_refuses_the_extra_connection_until_one_drops() {
     let databases = registry(&[("small", "small-*", Some(2))]);
     let first = connect(&databases, "small-1");
@@ -182,7 +172,6 @@ fn max_connections_refuses_the_extra_connection_until_one_drops() {
 }
 
 #[test]
-#[ignore = "xfail: databases is not implemented yet"]
 fn max_connections_counts_each_database_on_its_own() {
     let databases = registry(&[("small", "small-*", Some(1))]);
     let _one = connect(&databases, "small-1");
@@ -194,7 +183,6 @@ fn max_connections_counts_each_database_on_its_own() {
 }
 
 #[test]
-#[ignore = "xfail: databases is not implemented yet"]
 fn a_class_without_max_connections_has_no_limit() {
     let databases = any();
     let connections: Vec<_> = (0..500).map(|_| connect(&databases, "db")).collect();
@@ -202,7 +190,6 @@ fn a_class_without_max_connections_has_no_limit() {
 }
 
 #[test]
-#[ignore = "xfail: databases is not implemented yet"]
 fn a_refused_connection_leaves_no_database_behind() {
     let databases = registry(&[("none", "*", Some(0))]);
     assert_eq!(
@@ -213,7 +200,6 @@ fn a_refused_connection_leaves_no_database_behind() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: databases is not implemented yet"]
 async fn a_notification_reaches_only_the_listeners_of_its_channel_and_database() {
     let databases = any();
     let mut listening = connect(&databases, "a");
@@ -236,7 +222,6 @@ async fn a_notification_reaches_only_the_listeners_of_its_channel_and_database()
 }
 
 #[tokio::test]
-#[ignore = "xfail: databases is not implemented yet"]
 async fn listening_twice_notifies_once() {
     let databases = any();
     let mut connection = connect(&databases, "a");
@@ -254,7 +239,6 @@ async fn listening_twice_notifies_once() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: databases is not implemented yet"]
 async fn unlisten_stops_one_channel_and_star_stops_all() {
     let databases = any();
     let mut connection = connect(&databases, "a");
@@ -279,7 +263,6 @@ async fn unlisten_stops_one_channel_and_star_stops_all() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: databases is not implemented yet"]
 async fn events_arrive_in_the_order_they_were_sent() {
     let databases = any();
     let mut connection = connect(&databases, "a");
@@ -295,7 +278,6 @@ async fn events_arrive_in_the_order_they_were_sent() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: databases is not implemented yet"]
 async fn event_waits_for_an_event_that_a_task_sends_later() {
     let databases = Arc::new(any());
     let mut connection = connect(&databases, "a");
@@ -310,7 +292,6 @@ async fn event_waits_for_an_event_that_a_task_sends_later() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: databases is not implemented yet"]
 async fn a_class_target_with_fraction_one_reaches_every_database_of_the_class() {
     let databases = registry(&[("small", "small-*", None), ("big", "big-*", None)]);
     let mut connections = [
@@ -333,7 +314,6 @@ async fn a_class_target_with_fraction_one_reaches_every_database_of_the_class() 
 }
 
 #[test]
-#[ignore = "xfail: databases is not implemented yet"]
 fn a_class_target_without_a_fraction_reaches_every_database() {
     let target: Target = serde_json::from_str(r#"{"class": "small"}"#).unwrap();
     let databases = registry(&[("small", "small-*", None)]);
@@ -345,7 +325,6 @@ fn a_class_target_without_a_fraction_reaches_every_database() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: databases is not implemented yet"]
 async fn a_class_target_with_fraction_zero_reaches_nothing() {
     let databases = any();
     let mut connection = connect(&databases, "a");
@@ -358,7 +337,6 @@ async fn a_class_target_with_fraction_zero_reaches_nothing() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: databases is not implemented yet"]
 async fn a_class_target_picks_each_database_at_random_as_a_whole() {
     let databases = registry(&[("small", "small-*", None)]);
     let mut pairs: Vec<_> = (0..1000)
@@ -384,7 +362,6 @@ async fn a_class_target_picks_each_database_at_random_as_a_whole() {
 }
 
 #[test]
-#[ignore = "xfail: databases is not implemented yet"]
 fn unknown_databases_and_classes_are_reached_by_nobody() {
     let databases = registry(&[("small", "small-*", None)]);
     let _open = connect(&databases, "small-1");
@@ -400,7 +377,6 @@ fn unknown_databases_and_classes_are_reached_by_nobody() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: databases is not implemented yet"]
 async fn terminate_reaches_every_connection_of_the_database() {
     let databases = any();
     let mut listening = connect(&databases, "a");
@@ -416,7 +392,6 @@ async fn terminate_reaches_every_connection_of_the_database() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: databases is not implemented yet"]
 async fn terminate_reaches_every_connection_of_the_class() {
     let databases = registry(&[("small", "small-*", None), ("big", "big-*", None)]);
     let mut small = [
@@ -434,7 +409,6 @@ async fn terminate_reaches_every_connection_of_the_class() {
 }
 
 #[test]
-#[ignore = "xfail: databases is not implemented yet"]
 fn info_counts_connections_and_listeners_until_the_last_one_drops() {
     let databases = registry(&[("small", "small-*", None)]);
     assert_eq!(databases.info("small-1"), None);
@@ -466,7 +440,6 @@ fn info_counts_connections_and_listeners_until_the_last_one_drops() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: databases is not implemented yet"]
 async fn a_database_without_connections_is_closed_and_reopens_without_state() {
     let databases = any();
     let connection = connect(&databases, "a");
@@ -483,7 +456,6 @@ async fn a_database_without_connections_is_closed_and_reopens_without_state() {
 }
 
 #[test]
-#[ignore = "xfail: databases is not implemented yet"]
 fn concurrent_connects_and_drops_leave_no_state() {
     const NAMES: usize = 500;
     let databases = any();
@@ -517,7 +489,6 @@ fn concurrent_connects_and_drops_leave_no_state() {
 }
 
 #[test]
-#[ignore = "xfail: databases is not implemented yet"]
 fn concurrent_connects_never_exceed_max_connections() {
     let databases = registry(&[("limited", "*", Some(4))]);
     thread::scope(|scope| {
