@@ -43,6 +43,14 @@ localhost or a private network.
 
 Linux and macOS.
 
+Simulated latencies under a millisecond need a machine that wakes a
+sleeping thread within tens of microseconds of when it asked. Some
+virtual machines take milliseconds (OrbStack's Linux VMs on macOS, for
+one): there, these latencies come out too long, and the timer tests
+(`cargo test timer::`) fail. GitHub's hosted macOS runners fire every
+timer about half its delay late, so on them the tests only check that
+no sleep wakes early or is lost.
+
 ## Running the tests
 
 ```sh
