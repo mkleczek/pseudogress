@@ -117,7 +117,6 @@ fn assert_names(error: &str, path: &Path) {
 }
 
 #[tokio::test]
-#[ignore = "xfail: tls is not implemented yet"]
 async fn exchanges_bytes_with_a_client_that_sends_alpn() {
     let dir = TempDir::new("alpn");
     let (config, certificate) = identity(&dir, &PKCS_ECDSA_P256_SHA256);
@@ -127,7 +126,6 @@ async fn exchanges_bytes_with_a_client_that_sends_alpn() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: tls is not implemented yet"]
 async fn exchanges_bytes_with_a_client_that_sends_no_alpn() {
     let dir = TempDir::new("no-alpn");
     let (config, certificate) = identity(&dir, &PKCS_ECDSA_P256_SHA256);
@@ -139,7 +137,6 @@ async fn exchanges_bytes_with_a_client_that_sends_no_alpn() {
 /// A resumed handshake would hide the cost a client pays against PostgreSQL,
 /// which has no session tickets or cache.
 #[tokio::test]
-#[ignore = "xfail: tls is not implemented yet"]
 async fn never_resumes_a_session() {
     let dir = TempDir::new("resumption");
     let (config, certificate) = identity(&dir, &PKCS_ECDSA_P256_SHA256);
@@ -154,7 +151,6 @@ async fn never_resumes_a_session() {
 }
 
 #[test]
-#[ignore = "xfail: tls is not implemented yet"]
 fn end_point_is_the_sha256_of_a_p256_certificate() {
     let dir = TempDir::new("p256");
     let (config, certificate) = identity(&dir, &PKCS_ECDSA_P256_SHA256);
@@ -163,7 +159,6 @@ fn end_point_is_the_sha256_of_a_p256_certificate() {
 }
 
 #[test]
-#[ignore = "xfail: tls is not implemented yet"]
 fn end_point_is_the_sha384_of_a_p384_certificate() {
     let dir = TempDir::new("p384");
     let (config, certificate) = identity(&dir, &PKCS_ECDSA_P384_SHA384);
@@ -172,21 +167,21 @@ fn end_point_is_the_sha384_of_a_p384_certificate() {
 }
 
 /// No ECDSA certificate with SHA-512 can be generated, so the signature
-/// algorithm of a P-256 certificate is changed. Nothing checks the signature
-/// when a certificate is loaded.
+/// algorithm of a P-256 certificate is changed in both places that state it,
+/// the signed part and the certificate. Loading a certificate does not check
+/// its signature.
 #[test]
-#[ignore = "xfail: tls is not implemented yet"]
 fn end_point_is_the_sha512_of_a_certificate_signed_with_sha512() {
     let dir = TempDir::new("sha512");
     let (mut config, certificate) = identity(&dir, &PKCS_ECDSA_P256_SHA256);
     let ecdsa_with_sha256 = [0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
     let mut der = certificate.to_vec();
-    // The signature algorithm after the signed part is the last one.
-    let oid = der
+    while let Some(oid) = der
         .windows(ecdsa_with_sha256.len())
-        .rposition(|window| window == ecdsa_with_sha256)
-        .unwrap();
-    der[oid + ecdsa_with_sha256.len() - 1] = 0x04;
+        .position(|window| window == ecdsa_with_sha256)
+    {
+        der[oid + ecdsa_with_sha256.len() - 1] = 0x04;
+    }
     let pem = format!(
         "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
         STANDARD.encode(&der)
@@ -197,7 +192,6 @@ fn end_point_is_the_sha512_of_a_certificate_signed_with_sha512() {
 }
 
 #[test]
-#[ignore = "xfail: tls is not implemented yet"]
 fn a_missing_certificate_is_an_error() {
     let dir = TempDir::new("missing-certificate");
     let (config, _) = identity(&dir, &PKCS_ECDSA_P256_SHA256);
@@ -206,7 +200,6 @@ fn a_missing_certificate_is_an_error() {
 }
 
 #[test]
-#[ignore = "xfail: tls is not implemented yet"]
 fn a_missing_key_is_an_error() {
     let dir = TempDir::new("missing-key");
     let (config, _) = identity(&dir, &PKCS_ECDSA_P256_SHA256);
@@ -215,7 +208,6 @@ fn a_missing_key_is_an_error() {
 }
 
 #[test]
-#[ignore = "xfail: tls is not implemented yet"]
 fn a_certificate_file_without_a_certificate_is_an_error() {
     let dir = TempDir::new("invalid-certificate");
     let (mut config, _) = identity(&dir, &PKCS_ECDSA_P256_SHA256);
@@ -224,7 +216,6 @@ fn a_certificate_file_without_a_certificate_is_an_error() {
 }
 
 #[test]
-#[ignore = "xfail: tls is not implemented yet"]
 fn a_key_file_without_a_key_is_an_error() {
     let dir = TempDir::new("invalid-key");
     let (mut config, _) = identity(&dir, &PKCS_ECDSA_P256_SHA256);
@@ -233,7 +224,6 @@ fn a_key_file_without_a_key_is_an_error() {
 }
 
 #[test]
-#[ignore = "xfail: tls is not implemented yet"]
 fn a_key_of_another_certificate_is_an_error() {
     let dir = TempDir::new("mismatch");
     let (mut config, _) = identity(&dir, &PKCS_ECDSA_P256_SHA256);
