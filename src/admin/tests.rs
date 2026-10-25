@@ -89,7 +89,6 @@ async fn next_event(connection: &mut Connection) -> Event {
 }
 
 #[tokio::test]
-#[ignore = "xfail: admin is not implemented yet"]
 async fn get_settings_returns_the_class_settings() {
     let admin = start().await;
     let (head, body) = send(&admin, "GET", "/classes/small/settings", "").await;
@@ -99,7 +98,6 @@ async fn get_settings_returns_the_class_settings() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: admin is not implemented yet"]
 async fn put_settings_replaces_the_class_settings() {
     let admin = start().await;
     let (head, body) = send(
@@ -139,7 +137,6 @@ async fn put_settings_replaces_the_class_settings() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: admin is not implemented yet"]
 async fn put_settings_defaults_missing_fields() {
     let admin = start().await;
     send(
@@ -169,7 +166,6 @@ async fn put_settings_defaults_missing_fields() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: admin is not implemented yet"]
 async fn put_settings_refuses_an_invalid_latency_model() {
     let admin = start().await;
     let before = admin.classes[0].settings.load_full();
@@ -191,7 +187,6 @@ async fn put_settings_refuses_an_invalid_latency_model() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: admin is not implemented yet"]
 async fn unknown_class_is_404() {
     let admin = start().await;
     let (head, _) = send(&admin, "GET", "/classes/nope/settings", "").await;
@@ -201,7 +196,6 @@ async fn unknown_class_is_404() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: admin is not implemented yet"]
 async fn invalid_json_is_400() {
     let admin = start().await;
     for (method, path, body) in [
@@ -217,7 +211,6 @@ async fn invalid_json_is_400() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: admin is not implemented yet"]
 async fn malformed_request_is_400() {
     let admin = start().await;
     let (head, _) = exchange(admin.address, b"GARBAGE\r\n\r\n").await.unwrap();
@@ -225,7 +218,6 @@ async fn malformed_request_is_400() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: admin is not implemented yet"]
 async fn oversized_head_is_431() {
     let admin = start().await;
     let mut request = b"GET /metrics HTTP/1.1\r\nX-Padding: ".to_vec();
@@ -235,7 +227,6 @@ async fn oversized_head_is_431() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: admin is not implemented yet"]
 async fn oversized_body_is_413() {
     let admin = start().await;
     // Only the head is sent: the body is refused before it is read.
@@ -245,7 +236,6 @@ async fn oversized_body_is_413() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: admin is not implemented yet"]
 async fn wrong_method_is_405() {
     let admin = start().await;
     for (method, path) in [
@@ -262,7 +252,6 @@ async fn wrong_method_is_405() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: admin is not implemented yet"]
 async fn unknown_path_is_404() {
     let admin = start().await;
     let (head, _) = send(&admin, "GET", "/", "").await;
@@ -272,7 +261,6 @@ async fn unknown_path_is_404() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: admin is not implemented yet"]
 async fn metrics_names_the_classes() {
     let admin = start().await;
     let (head, body) = send(&admin, "GET", "/metrics", "").await;
@@ -285,7 +273,6 @@ async fn metrics_names_the_classes() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: admin is not implemented yet"]
 async fn notify_reaches_listening_connections() {
     let admin = start().await;
     let mut connection = admin.databases.connect("small-1").unwrap();
@@ -328,7 +315,6 @@ async fn notify_reaches_listening_connections() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: admin is not implemented yet"]
 async fn terminate_ends_connections() {
     let admin = start().await;
     let mut connection = admin.databases.connect("small-1").unwrap();
@@ -339,7 +325,6 @@ async fn terminate_ends_connections() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: admin is not implemented yet"]
 async fn database_info_follows_open_connections() {
     let admin = start().await;
     let (head, _) = send(&admin, "GET", "/databases/small-1", "").await;
