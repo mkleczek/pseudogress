@@ -7,14 +7,26 @@
 //! simulated time has passed and writes the answer before it reads on, as a
 //! PostgreSQL backend does.
 
-use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    future::Future,
+    io::{self, ErrorKind},
+    net::SocketAddr,
+    sync::Arc,
+    time::Duration,
+};
 
 use bytes::BytesMut;
 use pgwire::messages::PgWireFrontendMessage;
-use tokio::net::TcpListener;
+use socket2::{Domain, Protocol, Socket, Type};
+use tokio::{net::TcpListener, task::JoinSet};
 
 use crate::{auth::Verifiers, class::Classes, databases::Databases, tls::Tls};
 
+mod batches;
+mod cancel;
+mod listen;
+mod peer;
+mod setup;
 #[cfg(test)]
 mod tests;
 
@@ -73,8 +85,16 @@ pub struct Shared<C> {
 /// Binds an address for PostgreSQL connections, with an accept queue long
 /// enough for storms of new connections. Port 0 binds a free port.
 pub fn listen(address: SocketAddr) -> std::io::Result<TcpListener> {
-    let _ = address;
-    todo!()
+    let socket = Socket::new(
+        Domain::for_address(address),
+        Type::STREAM,
+        Some(Protocol::TCP),
+    )?;
+    socket.set_reuse_address(true)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&address.into())?;
+    socket.listen(4096)?;
+    TcpListener::from_std(socket.into())
 }
 
 /// Accepts connections on every listener, until the process ends.
@@ -82,6 +102,48 @@ pub async fn serve<C: Connector>(
     listeners: Vec<TcpListener>,
     shared: Arc<Shared<C>>,
 ) -> std::io::Result<()> {
-    let _ = (listeners, shared);
-    todo!()
+    let mut accepting = JoinSet::new();
+    for listener in listeners {
+        accepting.spawn(accept(listener, shared.clone()));
+    }
+    match accepting.join_next().await {
+        Some(Ok(error)) => Err(error),
+        Some(Err(error)) => Err(io::Error::other(error)),
+        None => Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            "no address to listen on",
+        )),
+    }
+}
+
+/// Returns the error that ends the listener.
+async fn accept<C: Connector>(listener: TcpListener, shared: Arc<Shared<C>>) -> io::Error {
+    loop {
+        match listener.accept().await {
+            Ok((stream, _)) => {
+                // PostgreSQL sets it too: without it, delayed ACKs add tens
+                // of milliseconds to small answers.
+                let _ = stream.set_nodelay(true);
+                tokio::spawn(setup::accept(stream, shared.clone()));
+            }
+            Err(error) if transient(&error) => tokio::time::sleep(Duration::from_millis(10)).await,
+            Err(error) => return error,
+        }
+    }
+}
+
+/// Errors of the connection being accepted, and running out of file
+/// descriptors (ENFILE and EMFILE: 23 and 24 on Linux and macOS) end only
+/// that connection: others close and free descriptors.
+fn transient(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        ErrorKind::ConnectionAborted | ErrorKind::ConnectionReset | ErrorKind::Interrupted
+    ) || matches!(error.raw_os_error(), Some(23 | 24))
+}
+
+/// Whether a fault with probability `p` happens. Most faults are off, so the
+/// random number is only drawn for the others.
+fn chance(p: f64) -> bool {
+    p > 0.0 && rand::random::<f64>() < p
 }

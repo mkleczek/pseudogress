@@ -15,20 +15,33 @@ use std::{
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use pgwire::messages::{
-    PgWireFrontendMessage,
+    PgWireFrontendMessage, SslNegotiationMetaMessage,
     data::{DataRow, FieldDescription, ParameterDescription, RowDescription},
     extendedquery::{BindComplete, CloseComplete, Flush, Parse, ParseComplete, Sync},
     response::{CommandComplete, TransactionStatus},
-    startup::{PasswordMessageFamily, SASLInitialResponse, SASLResponse, Startup},
+    simplequery::Query,
+    startup::{PasswordMessageFamily, SASLInitialResponse, SASLResponse, SslRequest, Startup},
 };
-use postgres_protocol::authentication::sasl::{ChannelBinding, SCRAM_SHA_256, ScramSha256};
+use postgres_protocol::authentication::sasl::{
+    ChannelBinding, SCRAM_SHA_256, SCRAM_SHA_256_PLUS, ScramSha256,
+};
+use rcgen::{CertificateParams, KeyPair};
+use sha2::{Digest, Sha256};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::TcpStream,
-    sync::mpsc,
+    sync::{Barrier, Semaphore, mpsc},
     time::{sleep, timeout},
 };
 use tokio_postgres::{AsyncMessage, Client, Error, NoTls, error::SqlState};
+use tokio_rustls::{
+    TlsConnector,
+    rustls::{
+        ClientConfig, RootCertStore,
+        crypto::ring,
+        pki_types::{CertificateDer, ServerName},
+    },
+};
 
 use super::*;
 use crate::{
@@ -37,6 +50,7 @@ use crate::{
     config,
     databases::{Databases, Target},
     metrics::{self, ClassMetrics},
+    tls::Tls,
     wire::{put, put_error, put_ready},
 };
 
@@ -208,6 +222,10 @@ fn class(name: &str, databases: &str) -> config::Class {
 
 /// Serves the classes on a free port, once it accepts connections.
 async fn start(classes: Vec<config::Class>) -> Server {
+    start_with(classes, None).await
+}
+
+async fn start_with(classes: Vec<config::Class>, tls: Option<Tls>) -> Server {
     // Tests open thousands of sockets.
     let _ = rlimit::increase_nofile_limit(u64::MAX);
     let exec = Arc::new(AtomicU64::new(0));
@@ -216,7 +234,7 @@ async fn start(classes: Vec<config::Class>) -> Server {
         databases: Arc::new(Databases::new(&classes)),
         verifiers: Verifiers::new(),
         secret: SECRET.into(),
-        tls: None,
+        tls,
         connector: Answering { exec: exec.clone() },
     });
     // Bound before `serve` gets it, so that no other test can take the port.
@@ -310,7 +328,6 @@ fn lateness(server: &Server) -> (u64, f64) {
 }
 
 #[tokio::test]
-#[ignore = "xfail: session is not implemented yet"]
 async fn derived_and_fixed_passwords_work() {
     let mut fixed = class("fixed", "fixed-*");
     fixed.password = Some("fixed password".into());
@@ -326,7 +343,7 @@ async fn derived_and_fixed_passwords_work() {
     let row = client.query_one("select 1", &[]).await.unwrap();
     assert_eq!(row.get::<_, i32>(0), 1);
     let messages = client.simple_query("select 1").await.unwrap();
-    assert_eq!(messages.len(), 2, "a row and the command's completion");
+    assert_eq!(messages.len(), 3, "row description, row and completion");
 
     // A password derived for another database does not work.
     let error = connect(&server, "derived-1", &derived("derived-2"))
@@ -337,7 +354,6 @@ async fn derived_and_fixed_passwords_work() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: session is not implemented yet"]
 async fn a_wrong_password_is_rejected() {
     let server = start(vec![class("app", "app-*")]).await;
     let error = connect(&server, "app-1", "wrong").await.err().unwrap();
@@ -351,7 +367,6 @@ async fn a_wrong_password_is_rejected() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: session is not implemented yet"]
 async fn an_unknown_database_is_rejected() {
     let server = start(vec![class("app", "app-*")]).await;
     let error = connect(&server, "nowhere", "any").await.err().unwrap();
@@ -360,7 +375,6 @@ async fn an_unknown_database_is_rejected() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: session is not implemented yet"]
 async fn a_user_outside_the_class_is_rejected() {
     let server = start(vec![class("app", "app-*")]).await;
     let error = connect_as(&server, "stranger", "app-1", "any")
@@ -372,7 +386,6 @@ async fn a_user_outside_the_class_is_rejected() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: session is not implemented yet"]
 async fn max_connections_limits_the_connections_of_a_database() {
     let mut limited = class("app", "app-*");
     limited.max_connections = Some(2);
@@ -390,7 +403,6 @@ async fn max_connections_limits_the_connections_of_a_database() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: session is not implemented yet"]
 async fn the_round_trip_delays_setup_and_every_batch() {
     let round_trip = Duration::from_millis(20);
     let mut slow = class("app", "app-*");
@@ -410,7 +422,6 @@ async fn the_round_trip_delays_setup_and_every_batch() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: batches does not record how late answers are sent yet"]
 async fn every_batch_records_how_late_its_answer_is_sent() {
     let server = start(vec![class("app", "app-*")]).await;
     let client = connect(&server, "app-1", &derived("app-1")).await.unwrap();
@@ -436,7 +447,6 @@ async fn every_batch_records_how_late_its_answer_is_sent() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: session is not implemented yet"]
 async fn a_notification_reaches_a_listening_client() {
     let server = start(vec![class("app", "app-*")]).await;
     let (client, mut messages) = connect_listening(&server, "app-1").await;
@@ -477,7 +487,6 @@ async fn a_notification_reaches_a_listening_client() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: session is not implemented yet"]
 async fn terminate_ends_connections_with_an_admin_shutdown() {
     let server = start(vec![class("app", "app-*")]).await;
     let (client, mut messages) = connect_listening(&server, "app-1").await;
@@ -499,10 +508,9 @@ async fn terminate_ends_connections_with_an_admin_shutdown() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: session is not implemented yet"]
 async fn terminate_ends_a_connection_waiting_for_its_answer() {
     let server = start(vec![class("app", "app-*")]).await;
-    let (client, mut messages) = connect_listening(&server, "app-1").await;
+    let client = connect(&server, "app-1", &derived("app-1")).await.unwrap();
     server.set_exec(Duration::from_secs(30));
     let query = tokio::spawn(async move { client.simple_query("select 1").await });
     sleep(Duration::from_millis(100)).await;
@@ -511,15 +519,14 @@ async fn terminate_ends_a_connection_waiting_for_its_answer() {
         database: "app-1".into(),
     };
     assert_eq!(server.shared.databases.terminate(&target), 1);
-    let Ok(Some(Err(error))) = timeout(Duration::from_secs(5), messages.recv()).await else {
-        panic!("the connection did not end with an error");
-    };
-    assert_eq!(code(&error), &SqlState::ADMIN_SHUTDOWN);
-    assert!(query.await.unwrap().is_err());
+    let result = timeout(Duration::from_secs(5), query)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(code(&result.unwrap_err()), &SqlState::ADMIN_SHUTDOWN);
 }
 
 #[tokio::test]
-#[ignore = "xfail: session is not implemented yet"]
 async fn a_cancel_interrupts_a_long_execution() {
     let server = start(vec![class("app", "app-*")]).await;
     let client = Arc::new(connect(&server, "app-1", &derived("app-1")).await.unwrap());
@@ -528,7 +535,15 @@ async fn a_cancel_interrupts_a_long_execution() {
         let client = client.clone();
         tokio::spawn(async move { client.simple_query("select 1").await })
     };
-    sleep(Duration::from_millis(100)).await;
+    // A cancel that arrives while the connection is idle is ignored, so wait
+    // until the batch is running.
+    timeout(Duration::from_secs(5), async {
+        while server.metrics().in_flight.load(Relaxed) != 1 {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the batch is running");
     client.cancel_token().cancel_query(NoTls).await.unwrap();
 
     let result = timeout(Duration::from_secs(5), query)
@@ -538,13 +553,37 @@ async fn a_cancel_interrupts_a_long_execution() {
     assert_eq!(code(&result.unwrap_err()), &SqlState::QUERY_CANCELED);
 
     // A cancel that arrives while nothing runs does not affect the next batch.
+    // The cancel request is sent by hand, and the connection is read until the
+    // server closes it, which is after the cancel is registered.
+    let mut raw = Raw::login(&server, "app-1", &derived("app-1")).await;
     server.set_exec(Duration::from_millis(100));
-    client.cancel_token().cancel_query(NoTls).await.unwrap();
-    client.simple_query("select 1").await.unwrap();
+    let (pid, secret) = raw.key.expect("BackendKeyData");
+    let mut request = BytesMut::new();
+    request.put_i32(16);
+    request.put_i32(80877102);
+    request.put_i32(pid);
+    request.put_i32(secret);
+    let mut cancel = TcpStream::connect((Ipv4Addr::LOCALHOST, server.port))
+        .await
+        .unwrap();
+    cancel.write_all(&request).await.unwrap();
+    timeout(Duration::from_secs(5), cancel.read_to_end(&mut Vec::new()))
+        .await
+        .unwrap()
+        .unwrap();
+
+    raw.send(&[PgWireFrontendMessage::Query(Query::new("select 1".into()))])
+        .await;
+    loop {
+        let (tag, body) = raw.next().await;
+        assert_ne!(tag, b'E', "{}", String::from_utf8_lossy(&body));
+        if tag == b'Z' {
+            break;
+        }
+    }
 }
 
 #[tokio::test]
-#[ignore = "xfail: render does not know the lateness histogram yet"]
 async fn a_cancelled_answer_records_no_lateness() {
     let server = start(vec![class("app", "app-*")]).await;
     let client = Arc::new(connect(&server, "app-1", &derived("app-1")).await.unwrap());
@@ -571,7 +610,6 @@ async fn a_cancelled_answer_records_no_lateness() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: session is not implemented yet"]
 async fn a_statement_timeout_cancels_slow_statements() {
     let mut limited = class("app", "app-*");
     limited.settings.faults.statement_timeout = Some(Duration::from_millis(50));
@@ -589,7 +627,6 @@ async fn a_statement_timeout_cancels_slow_statements() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: session is not implemented yet"]
 async fn a_stall_holds_back_the_answer() {
     let server = start(vec![class("app", "app-*")]).await;
     let client = connect(&server, "app-1", &derived("app-1")).await.unwrap();
@@ -605,7 +642,6 @@ async fn a_stall_holds_back_the_answer() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: session is not implemented yet"]
 async fn a_reset_ends_the_connection_without_an_answer() {
     let server = start(vec![class("app", "app-*")]).await;
     let client = connect(&server, "app-1", &derived("app-1")).await.unwrap();
@@ -619,7 +655,6 @@ async fn a_reset_ends_the_connection_without_an_answer() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the connection stays open after the answer of a broken backend"]
 async fn a_broken_backend_ends_its_connection_after_its_answer() {
     let server = start(vec![class("app", "app-*")]).await;
     let (client, mut messages) = connect_listening(&server, "app-1").await;
@@ -634,7 +669,6 @@ async fn a_broken_backend_ends_its_connection_after_its_answer() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: session is not implemented yet"]
 async fn the_refuse_fault_closes_connections_at_once() {
     let mut refusing = class("app", "app-*");
     refusing.settings.faults.refuse = 1.0;
@@ -648,7 +682,6 @@ async fn the_refuse_fault_closes_connections_at_once() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: session is not implemented yet"]
 async fn the_reject_password_fault_fails_correct_passwords() {
     let mut rejecting = class("app", "app-*");
     rejecting.settings.faults.reject_password = 1.0;
@@ -663,20 +696,28 @@ async fn the_reject_password_fault_fails_correct_passwords() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "xfail: session is not implemented yet"]
 async fn a_thousand_clients_run_ten_queries_each() {
     let mut fixed = class("app", "app-*");
     // One password, so that the clients share a verifier.
     fixed.password = Some("fixed password".into());
     let server = Arc::new(start(vec![fixed]).await);
 
+    // Connections are made in small bursts: the OS caps the accept queue, and
+    // the clients' own SCRAM keeps the runtime busy.
+    let connecting = Arc::new(Semaphore::new(50));
+    let all_connected = Arc::new(Barrier::new(1000));
     let clients: Vec<_> = (0..1000)
         .map(|i| {
-            let server = server.clone();
+            let (server, connecting, all_connected) =
+                (server.clone(), connecting.clone(), all_connected.clone());
             tokio::spawn(async move {
-                let client = connect(&server, &format!("app-{}", i % 100), "fixed password")
-                    .await
-                    .unwrap();
+                let client = {
+                    let _permit = connecting.acquire().await.unwrap();
+                    connect(&server, &format!("app-{}", i % 100), "fixed password")
+                        .await
+                        .unwrap()
+                };
+                all_connected.wait().await;
                 for _ in 0..5 {
                     client.simple_query("select 1").await.unwrap();
                     let row = client.query_one("select 1", &[]).await.unwrap();
@@ -697,12 +738,15 @@ async fn a_thousand_clients_run_ten_queries_each() {
     }
     assert_eq!(server.metrics().connections.load(Relaxed), 0);
     assert_eq!(server.metrics().connects.load(Relaxed), 1000);
+    assert_eq!(server.metrics().statements.load(Relaxed), 1000 * 10);
 }
 
 /// A client that writes and reads the bytes of the protocol itself.
-struct Raw {
-    stream: TcpStream,
+struct Raw<S = TcpStream> {
+    stream: S,
     input: BytesMut,
+    /// Process id and secret key of the connection, from BackendKeyData.
+    key: Option<(i32, i32)>,
 }
 
 impl Raw {
@@ -712,41 +756,67 @@ impl Raw {
                 .await
                 .unwrap(),
             input: BytesMut::new(),
+            key: None,
         }
     }
 
     /// Connects and logs in with SCRAM-SHA-256, up to ReadyForQuery.
     async fn login(server: &Server, database: &str, password: &str) -> Raw {
         let mut raw = Raw::connect(server).await;
-        raw.startup(3, 0, database).await;
-        let (tag, body) = raw.next().await;
-        assert_eq!((tag, (&body[..4]).get_i32()), (b'R', 10), "SASL is offered");
+        raw.authenticate(
+            database,
+            password,
+            SCRAM_SHA_256,
+            ChannelBinding::unrequested(),
+        )
+        .await;
+        raw
+    }
+}
 
-        let mut scram = ScramSha256::new(password.as_bytes(), ChannelBinding::unrequested());
-        raw.send(&[PgWireFrontendMessage::PasswordMessageFamily(
+impl<S: AsyncRead + AsyncWrite + Unpin> Raw<S> {
+    /// Starts up and authenticates with SCRAM, up to ReadyForQuery. Returns
+    /// the mechanisms that the server offered.
+    async fn authenticate(
+        &mut self,
+        database: &str,
+        password: &str,
+        mechanism: &str,
+        binding: ChannelBinding,
+    ) -> String {
+        self.startup(3, 0, database).await;
+        let (tag, body) = self.next().await;
+        assert_eq!((tag, (&body[..4]).get_i32()), (b'R', 10), "SASL is offered");
+        let offered = String::from_utf8_lossy(&body[4..]).into_owned();
+
+        let mut scram = ScramSha256::new(password.as_bytes(), binding);
+        self.send(&[PgWireFrontendMessage::PasswordMessageFamily(
             PasswordMessageFamily::SASLInitialResponse(SASLInitialResponse::new(
-                SCRAM_SHA_256.into(),
+                mechanism.into(),
                 Some(Bytes::copy_from_slice(scram.message())),
             )),
         )])
         .await;
-        let (tag, body) = raw.next().await;
+        let (tag, body) = self.next().await;
         assert_eq!((tag, (&body[..4]).get_i32()), (b'R', 11), "SASL continues");
         scram.update(&body[4..]).unwrap();
-        raw.send(&[PgWireFrontendMessage::PasswordMessageFamily(
+        self.send(&[PgWireFrontendMessage::PasswordMessageFamily(
             PasswordMessageFamily::SASLResponse(SASLResponse::new(Bytes::copy_from_slice(
                 scram.message(),
             ))),
         )])
         .await;
-        let (tag, body) = raw.next().await;
+        let (tag, body) = self.next().await;
         assert_eq!((tag, (&body[..4]).get_i32()), (b'R', 12), "SASL ends");
         scram.finish(&body[4..]).unwrap();
         loop {
-            if raw.next().await.0 == b'Z' {
-                return raw;
+            match self.next().await {
+                (b'K', mut body) => self.key = Some((body.get_i32(), body.get_i32())),
+                (b'Z', _) => break,
+                _ => {}
             }
         }
+        offered
     }
 
     async fn startup(&mut self, major: u16, minor: u16, database: &str) {
@@ -799,7 +869,6 @@ fn sync() -> PgWireFrontendMessage {
 }
 
 #[tokio::test]
-#[ignore = "xfail: session is not implemented yet"]
 async fn pipelined_batches_are_answered_in_order() {
     let server = start(vec![class("app", "app-*")]).await;
     let mut raw = Raw::login(&server, "app-1", &derived("app-1")).await;
@@ -814,7 +883,6 @@ async fn pipelined_batches_are_answered_in_order() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: session is not implemented yet"]
 async fn pipelined_batches_pay_the_round_trip_once() {
     let mut slow = class("app", "app-*");
     slow.settings.round_trip = Duration::from_millis(100);
@@ -837,7 +905,6 @@ async fn pipelined_batches_pay_the_round_trip_once() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: session is not implemented yet"]
 async fn a_flush_batch_is_answered_without_ready_for_query() {
     let server = start(vec![class("app", "app-*")]).await;
     let mut raw = Raw::login(&server, "app-1", &derived("app-1")).await;
@@ -852,7 +919,6 @@ async fn a_flush_batch_is_answered_without_ready_for_query() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: session is not implemented yet"]
 async fn a_newer_protocol_minor_is_negotiated_down() {
     let server = start(vec![class("app", "app-*")]).await;
     let mut raw = Raw::connect(&server).await;
@@ -868,7 +934,7 @@ async fn a_newer_protocol_minor_is_negotiated_down() {
     let (tag, body) = raw.next().await;
     assert_eq!(tag, b'v');
     let mut expected = BytesMut::new();
-    expected.put_i32(0);
+    expected.put_i32(196608);
     expected.put_i32(1);
     expected.put_slice(b"_pq_.feature\0");
     assert_eq!(body, expected);
@@ -876,7 +942,6 @@ async fn a_newer_protocol_minor_is_negotiated_down() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: session is not implemented yet"]
 async fn another_protocol_major_is_refused() {
     let server = start(vec![class("app", "app-*")]).await;
     let mut raw = Raw::connect(&server).await;
@@ -889,7 +954,6 @@ async fn another_protocol_major_is_refused() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: session is not implemented yet"]
 async fn the_hang_fault_never_answers() {
     let mut hanging = class("app", "app-*");
     hanging.settings.faults.hang = 1.0;
@@ -899,4 +963,89 @@ async fn the_hang_fault_never_answers() {
 
     assert!(raw.next_within(Duration::from_millis(300)).await.is_none());
     assert_eq!(server.metrics().faults.load(Relaxed), 1);
+}
+
+/// Sends SSLRequest and returns the server's one-byte answer.
+async fn request_ssl(raw: &mut Raw) -> u8 {
+    raw.send(&[PgWireFrontendMessage::SslNegotiation(
+        SslNegotiationMetaMessage::PostgresSsl(SslRequest::new()),
+    )])
+    .await;
+    let mut answer = [0];
+    raw.stream.read_exact(&mut answer).await.unwrap();
+    answer[0]
+}
+
+#[tokio::test]
+async fn ssl_is_refused_without_tls() {
+    let server = start(vec![class("app", "app-*")]).await;
+    let mut raw = Raw::connect(&server).await;
+    assert_eq!(request_ssl(&mut raw).await, b'N');
+
+    // The client goes on in plain text, on the same connection.
+    let offered = raw
+        .authenticate(
+            "app-1",
+            &derived("app-1"),
+            SCRAM_SHA_256,
+            ChannelBinding::unrequested(),
+        )
+        .await;
+    assert!(!offered.contains(SCRAM_SHA_256_PLUS), "{offered}");
+}
+
+/// A TLS configuration for localhost, and the certificate that clients trust.
+fn identity() -> (Tls, CertificateDer<'static>) {
+    let key = KeyPair::generate().unwrap();
+    let certificate = CertificateParams::new(vec!["localhost".to_owned()])
+        .unwrap()
+        .self_signed(&key)
+        .unwrap();
+    let dir = std::env::temp_dir().join(format!("pseudogress-session-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = config::Tls {
+        certificate: dir.join("certificate.pem"),
+        key: dir.join("key.pem"),
+    };
+    std::fs::write(&config.certificate, certificate.pem()).unwrap();
+    std::fs::write(&config.key, key.serialize_pem()).unwrap();
+    let tls = Tls::load(&config).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    (tls, certificate.der().clone())
+}
+
+#[tokio::test]
+async fn tls_connections_authenticate_with_channel_binding() {
+    let (tls, certificate) = identity();
+    let server = start_with(vec![class("app", "app-*")], Some(tls)).await;
+    let mut raw = Raw::connect(&server).await;
+    assert_eq!(request_ssl(&mut raw).await, b'S');
+
+    let mut roots = RootCertStore::empty();
+    roots.add(certificate.clone()).unwrap();
+    let client = ClientConfig::builder_with_provider(Arc::new(ring::default_provider()))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let stream = TlsConnector::from(Arc::new(client))
+        .connect(ServerName::try_from("localhost").unwrap(), raw.stream)
+        .await
+        .unwrap();
+    let mut raw = Raw {
+        stream,
+        input: raw.input,
+        key: raw.key,
+    };
+
+    // The certificate is signed with SHA-256.
+    let binding = ChannelBinding::tls_server_end_point(Sha256::digest(&certificate).to_vec());
+    let offered = raw
+        .authenticate("app-1", &derived("app-1"), SCRAM_SHA_256_PLUS, binding)
+        .await;
+    assert!(offered.contains(SCRAM_SHA_256_PLUS), "{offered}");
+
+    raw.send(&[parse(), sync()]).await;
+    assert_eq!(raw.next().await.0, b'1');
+    assert_eq!(raw.next().await.0, b'Z');
 }
