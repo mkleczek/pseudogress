@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      # shell.nix takes the toolchain and PostgreSQL from <nixpkgs>.
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ matrix.os }}-
+      - name: Format
+        run: nix-shell --run 'cargo fmt --check'
+      - name: Lints
+        run: nix-shell --run 'cargo clippy --all-targets -- -D warnings'
+      # Every test binary runs, even after one of them fails.
+      - name: Tests
+        run: nix-shell --run 'cargo test --no-fail-fast'
