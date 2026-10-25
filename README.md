@@ -88,6 +88,10 @@ stall = 0.001
 stall_for = "2s"
 ```
 
+[docs/DESIGN.md](docs/DESIGN.md) explains what Pseudogress simulates and
+what it doesn't, the recording format, the admin API and measured
+performance.
+
 ## Licence
 
 AGPL-3.0-only.
