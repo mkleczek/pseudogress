@@ -7,7 +7,10 @@ use std::{
     net::TcpListener,
     path::PathBuf,
     process::{Command, Stdio},
-    sync::atomic::{AtomicU32, Ordering},
+    sync::{
+        Mutex, MutexGuard, PoisonError,
+        atomic::{AtomicU32, Ordering},
+    },
     time::Duration,
 };
 
@@ -25,6 +28,10 @@ use crate::{
 struct Cluster {
     dir: PathBuf,
     port: u16,
+    /// Only one cluster runs at a time: every PostgreSQL takes a System V
+    /// shared memory segment, and macOS allows 32 of them in all, many taken
+    /// by other PostgreSQLs on a development machine.
+    _exclusive: MutexGuard<'static, ()>,
 }
 
 impl Cluster {
@@ -40,15 +47,20 @@ impl Cluster {
             eprintln!("initdb is not on the PATH: run the tests in nix-shell");
             return None;
         }
+        static EXCLUSIVE: Mutex<()> = Mutex::new(());
         static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let exclusive = EXCLUSIVE.lock().unwrap_or_else(PoisonError::into_inner);
         let dir = std::env::temp_dir().join(format!(
             "pseudogress-record-{}-{}",
             std::process::id(),
             COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
-        let port = free_port();
         // Dropping it cleans up, even when the start fails.
-        let cluster = Cluster { dir, port };
+        let mut cluster = Cluster {
+            dir,
+            port: free_port(),
+            _exclusive: exclusive,
+        };
         let data = cluster.dir.join("data");
         run(Command::new("initdb")
             .args(["--no-sync", "-U", "postgres", "--auth=trust", "-D"])
@@ -56,17 +68,29 @@ impl Cluster {
         if let Some(hba) = hba {
             fs::write(data.join("pg_hba.conf"), hba).unwrap();
         }
-        run(Command::new("pg_ctl")
-            .arg("-D")
-            .arg(&data)
-            .arg("-l")
-            .arg(cluster.dir.join("log"))
-            .arg("-o")
-            .arg(format!(
-                "-p {port} -k {} -c listen_addresses=127.0.0.1 -c fsync=off",
-                cluster.dir.display()
-            ))
-            .args(["-w", "start"]));
+        // Another process can take the port before PostgreSQL binds it: then
+        // the start fails, and the next attempt uses another port.
+        for attempt in 1..=5 {
+            let started = try_run(
+                Command::new("pg_ctl")
+                    .arg("-D")
+                    .arg(&data)
+                    .arg("-l")
+                    .arg(cluster.dir.join("log"))
+                    .arg("-o")
+                    .arg(format!(
+                        "-p {} -k {} -c listen_addresses=127.0.0.1 -c fsync=off",
+                        cluster.port,
+                        cluster.dir.display()
+                    ))
+                    .args(["-w", "start"]),
+            );
+            match started {
+                Ok(()) => break,
+                Err(error) if attempt == 5 => panic!("{error}"),
+                Err(_) => cluster.port = free_port(),
+            }
+        }
         Some(cluster)
     }
 
@@ -131,6 +155,8 @@ impl Drop for Cluster {
     }
 }
 
+/// The port is free only until something takes it: `Cluster::start` retries
+/// on another one when that happens first.
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .and_then(|listener| listener.local_addr())
@@ -139,12 +165,18 @@ fn free_port() -> u16 {
 }
 
 fn run(command: &mut Command) {
+    try_run(command).unwrap_or_else(|error| panic!("{error}"));
+}
+
+fn try_run(command: &mut Command) -> Result<(), String> {
     let output = command.output().expect("the command can be started");
-    assert!(
-        output.status.success(),
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(format!(
         "{command:?}: {}",
         String::from_utf8_lossy(&output.stderr)
-    );
+    ))
 }
 
 async fn connect(record: &Record) -> Recorder {
@@ -238,7 +270,6 @@ fn flush() -> Frontend {
 }
 
 #[tokio::test]
-#[ignore = "xfail: record is not implemented yet"]
 async fn a_simple_query_is_recorded_as_a_query_entry() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -274,7 +305,6 @@ async fn a_simple_query_is_recorded_as_a_query_entry() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: record is not implemented yet"]
 async fn an_execute_is_recorded_with_its_params_and_description() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -322,7 +352,6 @@ async fn an_execute_is_recorded_with_its_params_and_description() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: record is not implemented yet"]
 async fn an_execute_without_describe_portal_still_gets_its_description() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -367,7 +396,6 @@ async fn an_execute_without_describe_portal_still_gets_its_description() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: record is not implemented yet"]
 async fn statements_are_tracked_across_batches() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -411,7 +439,6 @@ async fn statements_are_tracked_across_batches() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: record is not implemented yet"]
 async fn an_error_response_is_recorded_in_the_rows() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -422,7 +449,7 @@ async fn an_error_response_is_recorded_in_the_rows() {
     let extended = send(
         &mut recorder,
         vec![
-            parse("", "select 1 / 0"),
+            parse("", "select 1 / x from generate_series(0, 0) x"),
             bind("", &[], false),
             execute(),
             sync(),
@@ -458,7 +485,6 @@ async fn an_error_response_is_recorded_in_the_rows() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: record is not implemented yet"]
 async fn a_flush_batch_ends_when_every_message_is_answered() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -482,7 +508,7 @@ async fn a_flush_batch_ends_when_every_message_is_answered() {
     let failed = send(
         &mut recorder,
         vec![
-            parse("", "select 1 / 0"),
+            parse("", "select 1 / x from generate_series(0, 0) x"),
             bind("", &[], false),
             execute(),
             flush(),
@@ -513,7 +539,6 @@ async fn a_flush_batch_ends_when_every_message_is_answered() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: record forwards the messages that PostgreSQL ignores after an error"]
 async fn after_an_error_without_a_sync_the_messages_up_to_the_sync_are_ignored() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -577,7 +602,6 @@ async fn after_an_error_without_a_sync_the_messages_up_to_the_sync_are_ignored()
 }
 
 #[tokio::test]
-#[ignore = "xfail: record is not implemented yet"]
 async fn repeated_statements_only_add_samples() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -632,7 +656,38 @@ async fn repeated_statements_only_add_samples() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: record is not implemented yet"]
+async fn every_execute_of_a_batch_gets_its_own_time() {
+    let Some(cluster) = Cluster::start(None) else {
+        return;
+    };
+    let record = cluster.record("postgres", None);
+    let mut recorder = connect(&record).await;
+
+    // PostgreSQL answers a batch at its Sync, unless asked to flush: the
+    // second Execute would seem to take no time.
+    send(
+        &mut recorder,
+        vec![
+            parse("", "select pg_sleep(0.05)"),
+            bind("", &[], false),
+            execute(),
+            bind("", &[], false),
+            execute(),
+            sync(),
+        ],
+    )
+    .await;
+
+    let entries = cluster.recording(&record);
+    let execute = the(&entries, is_execute);
+    let Entry::Execute { exec_us, .. } = execute else {
+        panic!("{execute:?}");
+    };
+    assert_eq!(exec_us.len(), 2);
+    assert!(exec_us.iter().all(|&us| us >= 50_000), "{exec_us:?}");
+}
+
+#[tokio::test]
 async fn cancelled_answers_57014_and_the_status_upstream_had() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -650,7 +705,6 @@ async fn cancelled_answers_57014_and_the_status_upstream_had() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: record answers the cancel of a Flush batch with a ReadyForQuery"]
 async fn cancelled_after_a_flush_batch_answers_no_ready_for_query_and_skips_to_the_sync() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -712,7 +766,6 @@ async fn cancelled_after_a_flush_batch_answers_no_ready_for_query_and_skips_to_t
 }
 
 #[tokio::test]
-#[ignore = "xfail: record is not implemented yet"]
 async fn cancelled_answers_a_ready_for_query_when_the_batch_ended_in_a_sync() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -749,7 +802,6 @@ async fn cancelled_answers_a_ready_for_query_when_the_batch_ended_in_a_sync() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: record leaves the connection open after the upstream failed"]
 async fn an_upstream_that_fails_breaks_the_connection() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -776,7 +828,6 @@ async fn an_upstream_that_fails_breaks_the_connection() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: record is not implemented yet"]
 async fn upstream_passwords_are_answered() {
     let hba = "\
         host all postgres 127.0.0.1/32 trust\n\
@@ -813,8 +864,10 @@ async fn upstream_passwords_are_answered() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: record is not implemented yet"]
 async fn connecting_to_nothing_fails() {
+    // A port whose listener is closed refuses connections at once. A socket
+    // that is bound but never listens would keep the port from others, but
+    // macOS doesn't refuse connections to it: they wait out the SYN timeout.
     let port = free_port();
     let config: Config = toml::from_str(&format!(
         r#"
@@ -834,7 +887,6 @@ async fn connecting_to_nothing_fails() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: record is not implemented yet"]
 async fn executes_that_ignore_parameters_are_recorded_once_with_every_time() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -902,7 +954,6 @@ async fn executes_that_ignore_parameters_are_recorded_once_with_every_time() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: record is not implemented yet"]
 async fn executes_without_a_matching_prefix_are_still_recorded_per_parameters() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -948,7 +999,6 @@ async fn executes_without_a_matching_prefix_are_still_recorded_per_parameters() 
 }
 
 #[test]
-#[ignore = "xfail: record is not implemented yet"]
 fn every_class_needs_an_upstream() {
     let config: Config = toml::from_str(
         r#"
@@ -969,7 +1019,6 @@ fn every_class_needs_an_upstream() {
 }
 
 #[test]
-#[ignore = "xfail: two classes write their recordings over each other"]
 fn two_classes_cannot_record_to_the_same_file() {
     let config: Config = toml::from_str(
         r#"
