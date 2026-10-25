@@ -1,6 +1,5 @@
 use std::{sync::LazyLock, thread};
 
-use base64::prelude::{BASE64_STANDARD, Engine as _};
 use postgres_protocol::authentication::sasl::{ChannelBinding, ScramSha256};
 
 use super::*;
@@ -62,7 +61,6 @@ fn final_message(edit: impl FnOnce([&str; 3]) -> String) -> Result<Bytes, AuthEr
 }
 
 #[test]
-#[ignore = "xfail: auth is not implemented yet"]
 fn a_client_with_the_password_authenticates_and_verifies_the_server() {
     for binding in [ChannelBinding::unsupported(), ChannelBinding::unrequested()] {
         let mut client = client(binding);
@@ -71,7 +69,6 @@ fn a_client_with_the_password_authenticates_and_verifies_the_server() {
 }
 
 #[test]
-#[ignore = "xfail: auth is not implemented yet"]
 fn server_first_message_is_what_postgresql_sends() {
     let client = client(ChannelBinding::unsupported());
     let client_first = std::str::from_utf8(client.message()).unwrap();
@@ -94,7 +91,6 @@ fn server_first_message_is_what_postgresql_sends() {
 }
 
 #[test]
-#[ignore = "xfail: auth is not implemented yet"]
 fn a_wrong_password_is_rejected() {
     let mut client = ScramSha256::new(b"wrong", ChannelBinding::unsupported());
     assert_eq!(
@@ -104,7 +100,6 @@ fn a_wrong_password_is_rejected() {
 }
 
 #[test]
-#[ignore = "xfail: auth is not implemented yet"]
 fn channel_binding_succeeds_when_the_end_point_data_matches() {
     let mut client = client(ChannelBinding::tls_server_end_point(END_POINT.to_vec()));
     assert_eq!(
@@ -114,7 +109,6 @@ fn channel_binding_succeeds_when_the_end_point_data_matches() {
 }
 
 #[test]
-#[ignore = "xfail: auth is not implemented yet"]
 fn channel_binding_fails_when_the_end_point_data_differs() {
     let other = ChannelBinding::tls_server_end_point(b"another certificate".to_vec());
     let mut client = client(other);
@@ -122,7 +116,6 @@ fn channel_binding_fails_when_the_end_point_data_differs() {
 }
 
 #[test]
-#[ignore = "xfail: auth is not implemented yet"]
 fn a_client_may_decline_channel_binding_it_was_offered() {
     let mut client = client(ChannelBinding::unsupported());
     assert_eq!(
@@ -132,7 +125,6 @@ fn a_client_may_decline_channel_binding_it_was_offered() {
 }
 
 #[test]
-#[ignore = "xfail: auth is not implemented yet"]
 fn a_client_that_thinks_the_server_lacks_channel_binding_is_refused() {
     // The gs2 flag `y` against a server that offered PLUS is a downgrade.
     let client = client(ChannelBinding::unrequested());
@@ -140,7 +132,6 @@ fn a_client_that_thinks_the_server_lacks_channel_binding_is_refused() {
 }
 
 #[test]
-#[ignore = "xfail: auth is not implemented yet"]
 fn the_mechanism_must_agree_with_the_gs2_flag() {
     let with_data = client(ChannelBinding::tls_server_end_point(END_POINT.to_vec()));
     let declined = client(ChannelBinding::unsupported());
@@ -151,7 +142,6 @@ fn the_mechanism_must_agree_with_the_gs2_flag() {
 }
 
 #[test]
-#[ignore = "xfail: auth is not implemented yet"]
 fn channel_binding_is_refused_without_end_point_data() {
     let client = client(ChannelBinding::tls_server_end_point(END_POINT.to_vec()));
     protocol_error(scram(None).client_first(PLUS, client.message()));
@@ -159,7 +149,6 @@ fn channel_binding_is_refused_without_end_point_data() {
 }
 
 #[test]
-#[ignore = "xfail: auth is not implemented yet"]
 fn an_unknown_mechanism_is_refused() {
     let client = client(ChannelBinding::unsupported());
     for mechanism in ["", "PLAIN", "SCRAM-SHA-1", "scram-sha-256"] {
@@ -168,7 +157,6 @@ fn an_unknown_mechanism_is_refused() {
 }
 
 #[test]
-#[ignore = "xfail: auth is not implemented yet"]
 fn a_malformed_client_first_message_is_refused() {
     let messages: &[&[u8]] = &[
         b"",
@@ -192,14 +180,12 @@ fn a_malformed_client_first_message_is_refused() {
 }
 
 #[test]
-#[ignore = "xfail: auth is not implemented yet"]
 fn the_username_authzid_and_extensions_are_ignored() {
     let first = scram(None).client_first(PLAIN, b"n,a=someone,n=whoever,r=abc,x=1");
     assert!(first.is_ok(), "{first:?}");
 }
 
 #[test]
-#[ignore = "xfail: auth is not implemented yet"]
 fn a_malformed_client_final_message_is_refused() {
     protocol_error(final_message(|_| String::new()));
     protocol_error(final_message(|[c, r, _]| format!("{c},{r}")));
@@ -213,7 +199,6 @@ fn a_malformed_client_final_message_is_refused() {
 }
 
 #[test]
-#[ignore = "xfail: auth is not implemented yet"]
 fn client_final_must_repeat_the_nonce_and_the_channel_binding() {
     protocol_error(final_message(|[c, r, p]| format!("{c},{r}x,{p}")));
     protocol_error(final_message(|[c, _, p]| format!("{c},r=x,{p}")));
@@ -223,7 +208,6 @@ fn client_final_must_repeat_the_nonce_and_the_channel_binding() {
 }
 
 #[test]
-#[ignore = "xfail: auth is not implemented yet"]
 fn messages_out_of_order_are_refused() {
     protocol_error(scram(None).client_final(b"c=biws,r=abc,p=AAAA"));
 
@@ -247,14 +231,12 @@ fn messages_out_of_order_are_refused() {
 }
 
 #[test]
-#[ignore = "xfail: auth is not implemented yet"]
 fn mechanisms_offer_channel_binding_only_with_tls() {
     assert_eq!(mechanisms(true), [PLUS, PLAIN]);
     assert_eq!(mechanisms(false), [PLAIN]);
 }
 
 #[test]
-#[ignore = "xfail: auth is not implemented yet"]
 fn derived_passwords_are_stable_and_differ_per_secret_database_and_user() {
     let password = derive_password("secret", "db", "user");
     assert_eq!(password, derive_password("secret", "db", "user"));
@@ -278,7 +260,6 @@ fn derived_passwords_are_stable_and_differ_per_secret_database_and_user() {
 }
 
 #[test]
-#[ignore = "xfail: auth is not implemented yet"]
 fn derived_passwords_are_hmac_sha256_of_database_nul_user() {
     // printf 'small-1\0authenticator' | openssl dgst -sha256 -hmac 'change me'
     assert_eq!(
@@ -293,7 +274,6 @@ fn derived_passwords_are_hmac_sha256_of_database_nul_user() {
 }
 
 #[test]
-#[ignore = "xfail: auth is not implemented yet"]
 fn a_repeated_password_gets_the_same_verifier() {
     let verifiers = Verifiers::new();
     let first = verifiers.get("pw");
@@ -302,7 +282,6 @@ fn a_repeated_password_gets_the_same_verifier() {
 }
 
 #[test]
-#[ignore = "xfail: auth is not implemented yet"]
 fn concurrent_gets_of_one_password_share_one_verifier() {
     let verifiers = Verifiers::new();
     let all: Vec<Arc<Verifier>> = thread::scope(|scope| {
