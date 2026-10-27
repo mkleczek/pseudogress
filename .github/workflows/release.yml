@@ -1,9 +1,11 @@
 name: Release
 
 # A tag push builds the executables and puts them on a draft release, for a
-# person to write the notes and publish. Run it by hand to add them to an
-# older tag, or, with publish off, to try the build and keep the files as
-# workflow artifacts.
+# person to write the notes and publish. Each executable is in a .tar.gz
+# archive, because the zip that upload-artifact makes drops the executable
+# bit, and a tar keeps it. Run it by hand to add them to an older tag, or,
+# with publish off, to try the build and keep the files as workflow
+# artifacts.
 on:
   push:
     tags: ["v*"]
@@ -107,12 +109,31 @@ jobs:
           echo "exit code $status: $output"
           test "$status" -eq 2
           test "$output" = "usage: pseudogress replay|record CONFIG"
-          mkdir dist
-          cp "$bin" "dist/$NAME"
+      - name: Archive
+        run: |
+          mkdir "$NAME" dist
+          install -m 755 "target/$RUST_TARGET/release/pseudogress" "$NAME/pseudogress"
+          cp LICENSE README.md "$NAME"
+          tar --sort=name --owner=0 --group=0 --numeric-owner -czf "dist/$NAME.tar.gz" "$NAME"
+      - name: Check the archive
+        run: |
+          archive=dist/$NAME.tar.gz
+          listing=$(tar -tvzf "$archive")
+          echo "$listing"
+          names=$(tar -tzf "$archive" | LC_ALL=C sort)
+          test "$names" = "$(printf '%s\n' "$NAME/" "$NAME/LICENSE" "$NAME/README.md" "$NAME/pseudogress")"
+          grep -q -E "^-rwxr-xr-x .* $NAME/pseudogress\$" <<< "$listing"
+          dir=$(mktemp -d)
+          tar -xzf "$archive" -C "$dir"
+          status=0
+          output=$("$dir/$NAME/pseudogress" 2>&1) || status=$?
+          echo "exit code $status: $output"
+          test "$status" -eq 2
+          test "$output" = "usage: pseudogress replay|record CONFIG"
       - uses: actions/upload-artifact@v7
         with:
           name: pseudogress-linux-${{ matrix.arch }}
-          path: dist/${{ env.NAME }}
+          path: dist/${{ env.NAME }}.tar.gz
           if-no-files-found: error
           overwrite: true
 
@@ -137,15 +158,16 @@ jobs:
           for target in aarch64-apple-darwin x86_64-apple-darwin; do
             cargo build --release --locked --target "$target" --config profile.release.strip=true
           done
-          mkdir dist
-          lipo -create -output "dist/$NAME" \
+          mkdir "$NAME"
+          lipo -create -output "$NAME/pseudogress" \
             target/aarch64-apple-darwin/release/pseudogress \
             target/x86_64-apple-darwin/release/pseudogress
           # Apple silicon runs only signed code, and lipo may leave the file unsigned.
-          codesign --force --sign - "dist/$NAME"
+          codesign --force --sign - "$NAME/pseudogress"
+          chmod 755 "$NAME/pseudogress"
       - name: Check
         run: |
-          bin=dist/$NAME
+          bin=$NAME/pseudogress
           lipo -info "$bin"
           lipo -archs "$bin" | grep -qw arm64
           lipo -archs "$bin" | grep -qw x86_64
@@ -163,10 +185,33 @@ jobs:
           echo "exit code $status: $output"
           test "$status" -eq 2
           test "$output" = "usage: pseudogress replay|record CONFIG"
+      - name: Archive
+        run: |
+          mkdir dist
+          cp LICENSE README.md "$NAME"
+          # Without AppleDouble files and extended attributes.
+          COPYFILE_DISABLE=1 tar --no-xattrs --no-mac-metadata --uid 0 --gid 0 --numeric-owner -czf "dist/$NAME.tar.gz" "$NAME"
+      - name: Check the archive
+        run: |
+          archive=dist/$NAME.tar.gz
+          listing=$(tar -tvzf "$archive")
+          echo "$listing"
+          names=$(tar -tzf "$archive" | LC_ALL=C sort)
+          test "$names" = "$(printf '%s\n' "$NAME/" "$NAME/LICENSE" "$NAME/README.md" "$NAME/pseudogress")"
+          grep -q -E "^-rwxr-xr-x .* $NAME/pseudogress\$" <<< "$listing"
+          # tar -t does not list the extended attributes that bsdtar keeps in pax headers.
+          test "$(gzip -dc "$archive" | grep -a -c -E 'LIBARCHIVE\.xattr|SCHILY\.xattr' || true)" = 0
+          dir=$(mktemp -d)
+          tar -xzf "$archive" -C "$dir"
+          status=0
+          output=$("$dir/$NAME/pseudogress" 2>&1) || status=$?
+          echo "exit code $status: $output"
+          test "$status" -eq 2
+          test "$output" = "usage: pseudogress replay|record CONFIG"
       - uses: actions/upload-artifact@v7
         with:
           name: pseudogress-macos-universal
-          path: dist/${{ env.NAME }}
+          path: dist/${{ env.NAME }}.tar.gz
           if-no-files-found: error
           overwrite: true
 
@@ -190,9 +235,9 @@ jobs:
         working-directory: dist
         run: |
           sha256sum \
-            "pseudogress-$VERSION-linux-x86_64" \
-            "pseudogress-$VERSION-linux-aarch64" \
-            "pseudogress-$VERSION-macos-universal" > SHA256SUMS
+            "pseudogress-$VERSION-linux-x86_64.tar.gz" \
+            "pseudogress-$VERSION-linux-aarch64.tar.gz" \
+            "pseudogress-$VERSION-macos-universal.tar.gz" > SHA256SUMS
           cat SHA256SUMS
       # --clobber and the draft lookup make a re-run safe.
       - name: Upload to the release

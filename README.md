@@ -41,21 +41,25 @@ localhost or a private network.
 
 ## Download
 
-Each release has one executable per platform on its
+Each release has one `.tar.gz` archive per platform on its
 [page](https://github.com/mkleczek/pseudogress/releases), and a
-`SHA256SUMS` file. After downloading, make it executable and check it:
+`SHA256SUMS` file. The archive holds the `pseudogress` executable, the
+licence and this README. Download the archive for your platform and
+`SHA256SUMS`, then check and unpack it, and run the executable:
 
 ```sh
-chmod +x pseudogress-<version>-linux-x86_64
 sha256sum -c --ignore-missing SHA256SUMS   # macOS: shasum -a 256 -c --ignore-missing SHA256SUMS
+tar -xzf pseudogress-<version>-linux-x86_64.tar.gz
+pseudogress-<version>-linux-x86_64/pseudogress
 ```
 
 - **Linux**, x86_64 and aarch64: glibc 2.28 or newer, which is RHEL 8,
   Debian 10, Ubuntu 20.04 and later. Distributions based on musl, such as
   Alpine, are not supported.
-- **macOS** 11 or newer, Apple silicon and Intel, in one file. macOS
-  quarantines a file downloaded with a browser; remove that with
-  `xattr -d com.apple.quarantine pseudogress-<version>-macos-universal`,
+- **macOS** 11 or newer, Apple silicon and Intel, in one archive. macOS
+  quarantines a file downloaded with a browser, and the quarantine carries
+  over to the unpacked files; remove it after unpacking with
+  `xattr -dr com.apple.quarantine pseudogress-<version>-macos-universal`,
   or download with `curl -LO`.
 
 ## Nix
