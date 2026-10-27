@@ -1,0 +1,204 @@
+name: Release
+
+# A tag push builds the executables and puts them on a draft release, for a
+# person to write the notes and publish. Run it by hand to add them to an
+# older tag, or, with publish off, to try the build and keep the files as
+# workflow artifacts.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build, for example v0.1.0
+        type: string
+        required: true
+      publish:
+        description: Upload the files to the tag's release, a draft if it has none
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+defaults:
+  run:
+    # With pipefail, which the default shell lacks.
+    shell: bash
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check the tag
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::the tag must look like v0.1.0"
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - name: Check the version in Cargo.toml
+        id: version
+        run: |
+          version=${TAG#v}
+          cargo_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "$version" != "$cargo_version" ]; then
+            echo "::error::the tag is $TAG, but Cargo.toml has version $cargo_version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  # Linked against glibc 2.28, so that one file runs on any mainstream
+  # distribution. A native runner for each architecture runs what it builds.
+  linux:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      NAME: pseudogress-${{ needs.version.outputs.version }}-linux-${{ matrix.arch }}
+      RUST_TARGET: ${{ matrix.arch }}-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      # zig links against the glibc version in the target's name.
+      - name: Install cargo-zigbuild
+        run: pip install cargo-zigbuild==0.24.0 ziglang==0.17.0
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --target "$RUST_TARGET"
+          rustup default stable
+      - name: Build
+        run: cargo zigbuild --release --locked --target "$RUST_TARGET.2.28" --config profile.release.strip=true
+      - name: Check
+        run: |
+          bin=target/$RUST_TARGET/release/pseudogress
+          file "$bin"
+          file "$bin" | grep -q 'dynamically linked'
+          newest=$(objdump -T "$bin" | grep -o 'GLIBC_[0-9][0-9.]*' | sort -V | tail -n 1)
+          echo "newest glibc symbol version: $newest"
+          test "$(printf '%s\n' "$newest" GLIBC_2.28 | sort -V | tail -n 1)" = GLIBC_2.28
+          needed=$(readelf -d "$bin" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p')
+          echo "needed libraries:"
+          echo "$needed"
+          unexpected=$(grep -v -E '^(lib(c|m|dl|pthread|rt|util|resolv|gcc_s)\.so\.[0-9]+|ld-linux-[a-z0-9-]+\.so\.[0-9]+)$' <<< "$needed" || true)
+          test -z "$unexpected"
+          status=0
+          output=$("$bin" 2>&1) || status=$?
+          echo "exit code $status: $output"
+          test "$status" -eq 2
+          test "$output" = "usage: pseudogress replay|record CONFIG"
+          mkdir dist
+          cp "$bin" "dist/$NAME"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pseudogress-linux-${{ matrix.arch }}
+          path: dist/${{ env.NAME }}
+          if-no-files-found: error
+          overwrite: true
+
+  # One file for both architectures, for macOS 11 and newer.
+  macos:
+    needs: version
+    runs-on: macos-latest
+    env:
+      NAME: pseudogress-${{ needs.version.outputs.version }}-macos-universal
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --target aarch64-apple-darwin --target x86_64-apple-darwin
+          rustup default stable
+      - name: Build
+        run: |
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --release --locked --target "$target" --config profile.release.strip=true
+          done
+          mkdir dist
+          lipo -create -output "dist/$NAME" \
+            target/aarch64-apple-darwin/release/pseudogress \
+            target/x86_64-apple-darwin/release/pseudogress
+          # Apple silicon runs only signed code, and lipo may leave the file unsigned.
+          codesign --force --sign - "dist/$NAME"
+      - name: Check
+        run: |
+          bin=dist/$NAME
+          lipo -info "$bin"
+          lipo -archs "$bin" | grep -qw arm64
+          lipo -archs "$bin" | grep -qw x86_64
+          codesign --verify "$bin"
+          libs=$(otool -L "$bin" | sed -n 's/^[[:space:]]\{1,\}\([^ ]*\) (.*/\1/p')
+          echo "linked libraries:"
+          echo "$libs"
+          unexpected=$(grep -v -E '^(/usr/lib/|/System/)' <<< "$libs" || true)
+          test -z "$unexpected"
+          minos=$(otool -arch all -l "$bin" | sed -n 's/^ *minos //p' | sort -u)
+          echo "minimum macOS version: $minos"
+          test "$minos" = 11.0
+          status=0
+          output=$("$bin" 2>&1) || status=$?
+          echo "exit code $status: $output"
+          test "$status" -eq 2
+          test "$output" = "usage: pseudogress replay|record CONFIG"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pseudogress-macos-universal
+          path: dist/${{ env.NAME }}
+          if-no-files-found: error
+          overwrite: true
+
+  publish:
+    if: github.event_name == 'push' || inputs.publish
+    needs: [version, linux, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: pseudogress-*
+          path: dist
+          merge-multiple: true
+      - name: Write SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum \
+            "pseudogress-$VERSION-linux-x86_64" \
+            "pseudogress-$VERSION-linux-aarch64" \
+            "pseudogress-$VERSION-macos-universal" > SHA256SUMS
+          cat SHA256SUMS
+      # --clobber and the draft lookup make a re-run safe.
+      - name: Upload to the release
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --draft --verify-tag --title "Pseudogress $VERSION" --notes ""
+          fi

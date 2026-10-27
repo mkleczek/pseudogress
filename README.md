@@ -39,6 +39,25 @@ The admin API has no authentication: whoever reaches it can read the
 metrics, change latency and faults, and end connections. Bind it to
 localhost or a private network.
 
+## Download
+
+Each release has one executable per platform on its
+[page](https://github.com/mkleczek/pseudogress/releases), and a
+`SHA256SUMS` file. After downloading, make it executable and check it:
+
+```sh
+chmod +x pseudogress-<version>-linux-x86_64
+sha256sum -c --ignore-missing SHA256SUMS   # macOS: shasum -a 256 -c --ignore-missing SHA256SUMS
+```
+
+- **Linux**, x86_64 and aarch64: glibc 2.28 or newer, which is RHEL 8,
+  Debian 10, Ubuntu 20.04 and later. Distributions based on musl, such as
+  Alpine, are not supported.
+- **macOS** 11 or newer, Apple silicon and Intel, in one file. macOS
+  quarantines a file downloaded with a browser; remove that with
+  `xattr -d com.apple.quarantine pseudogress-<version>-macos-universal`,
+  or download with `curl -LO`.
+
 ## Nix
 
 Run it without cloning:
