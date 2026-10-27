@@ -20,6 +20,7 @@ jobs:
       - uses: cachix/install-nix-action@v31
         with:
           nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: experimental-features = nix-command flakes
       - uses: actions/cache@v6
         with:
           path: |
@@ -35,3 +36,6 @@ jobs:
       # Every test binary runs, even after one of them fails.
       - name: Tests
         run: nix-shell --run 'cargo test --no-fail-fast'
+      # Builds the package, with the nixpkgs that flake.lock pins.
+      - name: Flake
+        run: nix flake check

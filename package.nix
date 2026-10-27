@@ -1,9 +1,9 @@
-# The PostgREST fork's harness pins pseudogress with fetchFromGitHub and
-# builds it with `callPackage "${src}/package.nix" { }`.
+# Called by overlay.nix, which default.nix and flake.nix use. Other setups can
+# call it directly on a fetched source: `callPackage "${src}/package.nix" { }`.
 { lib, rustPlatform }:
 rustPlatform.buildRustPackage {
   pname = "pseudogress";
-  version = "0.1.0";
+  version = (lib.importTOML ./Cargo.toml).package.version;
   src = lib.fileset.toSource {
     root = ./.;
     fileset = lib.fileset.unions [

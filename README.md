@@ -39,6 +39,47 @@ The admin API has no authentication: whoever reaches it can read the
 metrics, change latency and faults, and end connections. Bind it to
 localhost or a private network.
 
+## Nix
+
+Run it without cloning:
+
+```sh
+nix run github:mkleczek/pseudogress -- replay pseudogress.toml
+```
+
+To pin a version, add a tag or a commit to the URL:
+`github:mkleczek/pseudogress/<tag>` or `github:mkleczek/pseudogress/<commit>`.
+Only commits after v0.1.0 have a `flake.nix`.
+
+As a flake input, your `flake.lock` pins the commit, and the overlay adds
+`pkgs.pseudogress`; the package is also
+`inputs.pseudogress.packages.${system}.default`:
+
+```nix
+inputs.pseudogress.url = "github:mkleczek/pseudogress";
+# ...
+# The NixOS option. With `import nixpkgs { ... }`, pass the list as `overlays`.
+nixpkgs.overlays = [ inputs.pseudogress.overlays.default ];
+```
+
+Without flakes, `default.nix` and `shell.nix` take `pkgs` (`<nixpkgs>` by
+default), so `nix build -f .` and `nix develop -f shell.nix` work in a
+checkout. To use the package in another setup, import the overlay from a
+pinned commit:
+
+```nix
+import <nixpkgs> {
+  overlays = [
+    (import "${builtins.fetchTarball {
+      url = "https://github.com/mkleczek/pseudogress/archive/<commit>.tar.gz";
+      sha256 = "<hash>";   # optional, makes it a fixed download
+    }}/overlay.nix")
+  ];
+}
+```
+
+`nix-prefetch-url --unpack <url>` prints the `sha256` of a tarball.
+
 ## Platforms
 
 Linux and macOS.

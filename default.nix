@@ -1,2 +1,2 @@
 { pkgs ? import <nixpkgs> { } }:
-pkgs.callPackage ./package.nix { }
+(pkgs.extend (import ./overlay.nix)).pseudogress
