@@ -1,0 +1,264 @@
+{
+  "$defs": {
+    "ColumnOverride": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "description": "Size of the generated JSON.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "column": {
+          "description": "Name of the column.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "column",
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "Execution": {
+      "additionalProperties": false,
+      "description": "The times of statements: log-normal, with a given median and 99th percentile.",
+      "properties": {
+        "median": {
+          "description": "Half of the times are below it. A duration in humantime form, such as `500us` or `2s`.",
+          "type": "string"
+        },
+        "p99": {
+          "description": "99 of 100 times are below it, so it is not below the median. A duration in humantime form, such as `500us` or `2s`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "median",
+        "p99"
+      ],
+      "type": "object"
+    },
+    "Faults": {
+      "additionalProperties": false,
+      "description": "Faults, each with its probability, between 0 and 1.",
+      "properties": {
+        "hang": {
+          "default": 0.0,
+          "description": "An accepted connection never gets an answer.",
+          "format": "double",
+          "type": "number"
+        },
+        "refuse": {
+          "default": 0.0,
+          "description": "An accepted connection is closed at once.",
+          "format": "double",
+          "type": "number"
+        },
+        "reject_password": {
+          "default": 0.0,
+          "description": "A correct password gets FATAL 28P01.",
+          "format": "double",
+          "type": "number"
+        },
+        "reset": {
+          "default": 0.0,
+          "description": "A batch ends its connection with a reset.",
+          "format": "double",
+          "type": "number"
+        },
+        "stall": {
+          "default": 0.0,
+          "description": "A batch's responses are held back for `stall_for`.",
+          "format": "double",
+          "type": "number"
+        },
+        "stall_for": {
+          "default": "0s",
+          "description": "How long a stalled batch's responses are held back. A duration in humantime form, such as `500us` or `2s`.",
+          "type": "string"
+        },
+        "statement_timeout": {
+          "default": null,
+          "description": "A batch whose execution time exceeds it fails with 57014. A duration in humantime form, such as `500us` or `2s`; without it, no batch fails for its time.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Settings": {
+      "additionalProperties": false,
+      "description": "Latency and faults, which the admin API can change while connections run.",
+      "properties": {
+        "execution": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Execution"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A time drawn for every statement, added to its recorded one."
+        },
+        "execution_per_mib": {
+          "default": "0s",
+          "description": "Time added to every statement for each MiB of its answer. A duration in humantime form, such as `500us` or `2s`.",
+          "type": "string"
+        },
+        "execution_scale": {
+          "default": 1.0,
+          "description": "Factor applied to recorded execution times.",
+          "format": "double",
+          "type": "number"
+        },
+        "faults": {
+          "$ref": "#/$defs/Faults",
+          "default": {
+            "hang": 0.0,
+            "refuse": 0.0,
+            "reject_password": 0.0,
+            "reset": 0.0,
+            "stall": 0.0,
+            "stall_for": "0s",
+            "statement_timeout": null
+          },
+          "description": "What goes wrong, and how often."
+        },
+        "round_trip": {
+          "default": "0s",
+          "description": "Network round-trip time, added to every batch and every round trip of connection setup. A duration in humantime form, such as `500us` or `2s`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Upstream": {
+      "additionalProperties": false,
+      "properties": {
+        "database": {
+          "description": "The database to connect to, where `{database}` is replaced by the virtual database's name.",
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "password": {
+          "description": "Needed when the upstream asks for a password.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "port": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "user": {
+          "description": "The user that Pseudogress connects as.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "host",
+        "port",
+        "user",
+        "database"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A class of virtual databases: a `[[class]]` table of the configuration, or the answer of a class service, which leaves out `recording`.",
+  "properties": {
+    "databases": {
+      "description": "Pattern of database names, where `*` matches any characters. A class service's must match the database that was asked about.",
+      "type": "string"
+    },
+    "ignore_parameters": {
+      "default": [],
+      "description": "Statements whose answer doesn't depend on their parameters, by the start of their text: answered by their text alone, and recorded once.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "max_connections": {
+      "description": "Connections per database; more get FATAL 53300. Without it, there is no limit.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "name": {
+      "description": "Identifies the class. A class from a class service is recorded in `<name>.jsonl`, which restricts its name.",
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9_-]*$",
+      "type": "string"
+    },
+    "override": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ColumnOverride"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Replaces a column of recorded rows with generated JSON."
+    },
+    "password": {
+      "description": "Password of every user. Without it, passwords are derived from the secret, the database and the user.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "settings": {
+      "$ref": "#/$defs/Settings",
+      "default": {
+        "execution": null,
+        "execution_per_mib": "0s",
+        "execution_scale": 1.0,
+        "faults": {
+          "hang": 0.0,
+          "refuse": 0.0,
+          "reject_password": 0.0,
+          "reset": 0.0,
+          "stall": 0.0,
+          "stall_for": "0s",
+          "statement_timeout": null
+        },
+        "round_trip": "0s"
+      }
+    },
+    "upstream": {
+      "$ref": "#/$defs/Upstream",
+      "description": "The real PostgreSQL that record mode forwards to. A class service must have it, as its classes are for record mode."
+    },
+    "users": {
+      "description": "Users that may connect.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "name",
+    "databases",
+    "users",
+    "upstream"
+  ],
+  "title": "Pseudogress class",
+  "type": "object"
+}

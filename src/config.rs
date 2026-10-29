@@ -36,14 +36,25 @@ pub struct Tls {
     pub key: PathBuf,
 }
 
+/// A class of virtual databases: a `[[class]]` table of the configuration, or
+/// the answer of a class service, which leaves out `recording`.
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[cfg_attr(test, schemars(title = "Pseudogress class"))]
 #[serde(deny_unknown_fields)]
 pub struct Class {
-    #[cfg_attr(test, schemars(regex(pattern = crate::service::NAME_PATTERN)))]
+    /// Identifies the class. A class from a class service is recorded in
+    /// `<name>.jsonl`, which restricts its name.
+    #[cfg_attr(
+        test,
+        schemars(
+            regex(pattern = crate::service::NAME_PATTERN),
+            length(max = crate::service::MAX_NAME_LENGTH)
+        )
+    )]
     pub name: String,
-    /// Pattern of database names, where `*` matches any characters.
+    /// Pattern of database names, where `*` matches any characters. A class
+    /// service's must match the database that was asked about.
     pub databases: String,
     /// Users that may connect.
     pub users: Vec<String>,
@@ -55,14 +66,16 @@ pub struct Class {
     #[serde(default)]
     #[cfg_attr(test, schemars(skip))]
     pub recording: PathBuf,
-    /// The real PostgreSQL that record mode forwards to.
+    /// The real PostgreSQL that record mode forwards to. A class service must
+    /// have it, as its classes are for record mode.
     #[cfg_attr(test, schemars(with = "Upstream"))]
     pub upstream: Option<Upstream>,
     /// Statements whose answer doesn't depend on their parameters, by the
     /// start of their text: answered by their text alone, and recorded once.
     #[serde(default)]
     pub ignore_parameters: Vec<String>,
-    /// Connections per database; more get FATAL 53300.
+    /// Connections per database; more get FATAL 53300. Without it, there is no
+    /// limit.
     pub max_connections: Option<u32>,
     /// Replaces a column of recorded rows with generated JSON.
     #[serde(rename = "override")]
@@ -90,9 +103,12 @@ impl Class {
 pub struct Upstream {
     pub host: String,
     pub port: u16,
+    /// The user that Pseudogress connects as.
     pub user: String,
+    /// Needed when the upstream asks for a password.
     pub password: Option<String>,
-    /// `{database}` is replaced by the virtual database's name.
+    /// The database to connect to, where `{database}` is replaced by the
+    /// virtual database's name.
     pub database: String,
 }
 
@@ -100,18 +116,20 @@ pub struct Upstream {
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ColumnOverride {
+    /// Name of the column.
     pub column: String,
     /// Size of the generated JSON.
     pub bytes: usize,
 }
 
-/// What the admin API can change while connections run.
+/// Latency and faults, which the admin API can change while connections run.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, default)]
 pub struct Settings {
     /// Network round-trip time, added to every batch and every round trip of
-    /// connection setup.
+    /// connection setup. A duration in humantime form, such as `500us` or
+    /// `2s`.
     #[serde(with = "humantime_serde")]
     #[cfg_attr(test, schemars(with = "String"))]
     pub round_trip: Duration,
@@ -119,10 +137,12 @@ pub struct Settings {
     pub execution_scale: f64,
     /// A time drawn for every statement, added to its recorded one.
     pub execution: Option<Execution>,
-    /// Time added to every statement for each MiB of its answer.
+    /// Time added to every statement for each MiB of its answer. A duration
+    /// in humantime form, such as `500us` or `2s`.
     #[serde(with = "humantime_serde")]
     #[cfg_attr(test, schemars(with = "String"))]
     pub execution_per_mib: Duration,
+    /// What goes wrong, and how often.
     pub faults: Faults,
 }
 
@@ -182,15 +202,19 @@ impl Settings {
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct Execution {
+    /// Half of the times are below it. A duration in humantime form, such as
+    /// `500us` or `2s`.
     #[serde(with = "humantime_serde")]
     #[cfg_attr(test, schemars(with = "String"))]
     pub median: Duration,
+    /// 99 of 100 times are below it, so it is not below the median. A
+    /// duration in humantime form, such as `500us` or `2s`.
     #[serde(with = "humantime_serde")]
     #[cfg_attr(test, schemars(with = "String"))]
     pub p99: Duration,
 }
 
-/// Probabilities are between 0 and 1.
+/// Faults, each with its probability, between 0 and 1.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, default)]
@@ -205,10 +229,14 @@ pub struct Faults {
     pub reset: f64,
     /// A batch's responses are held back for `stall_for`.
     pub stall: f64,
+    /// How long a stalled batch's responses are held back. A duration in
+    /// humantime form, such as `500us` or `2s`.
     #[serde(with = "humantime_serde")]
     #[cfg_attr(test, schemars(with = "String"))]
     pub stall_for: Duration,
-    /// A batch whose execution time exceeds it fails with 57014.
+    /// A batch whose execution time exceeds it fails with 57014. A duration
+    /// in humantime form, such as `500us` or `2s`; without it, no batch fails
+    /// for its time.
     #[serde(with = "humantime_serde")]
     #[cfg_attr(test, schemars(with = "Option<String>"))]
     pub statement_timeout: Option<Duration>,
@@ -483,7 +511,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: the class service client is not implemented yet"]
     fn loading_refuses_a_class_without_a_recording_naming_the_class() {
         let dir =
             std::env::temp_dir().join(format!("pseudogress-recording-{}", std::process::id()));
@@ -504,7 +531,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: the class service client is not implemented yet"]
     fn a_class_has_no_recording_until_it_is_given_one() {
         let class: Class = toml::from_str("name = \"c\"\ndatabases = \"*\"\nusers = []").unwrap();
         assert_eq!(class.recording, PathBuf::new());
@@ -518,7 +544,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: the class service client is not implemented yet"]
     fn classes_written_as_toml_read_back_equal() {
         let minimal = Class {
             name: "minimal".into(),

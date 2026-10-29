@@ -21,7 +21,6 @@ fn rejected(template: &str) -> String {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn parses_a_template_with_a_host_a_port_a_path_and_a_query() {
     let template =
         Template::parse("http://classes.internal:8080/v1/classes/{database}?user={user}").unwrap();
@@ -32,7 +31,6 @@ fn parses_a_template_with_a_host_a_port_a_path_and_a_query() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn the_port_is_80_by_default_and_the_path_is_the_root() {
     let template = Template::parse("http://localhost?database={database}").unwrap();
     let url = template.fill("a", "b");
@@ -41,7 +39,6 @@ fn the_port_is_80_by_default_and_the_path_is_the_root() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn a_template_may_name_an_ip_address() {
     let url = Template::parse("http://127.0.0.1:9/{database}")
         .unwrap()
@@ -58,7 +55,6 @@ fn a_template_may_name_an_ip_address() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn the_user_is_optional_and_the_database_may_be_repeated() {
     let url = Template::parse("http://h/{database}/{database}")
         .unwrap()
@@ -71,7 +67,6 @@ fn the_user_is_optional_and_the_database_may_be_repeated() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn rejects_a_template_that_is_not_http() {
     for template in [
         "https://h/{database}",
@@ -86,7 +81,6 @@ fn rejects_a_template_that_is_not_http() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn rejects_a_template_without_the_database() {
     for template in ["http://h", "http://h/classes", "http://h/{user}?x=y"] {
         let error = rejected(template);
@@ -95,7 +89,6 @@ fn rejects_a_template_without_the_database() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn rejects_a_bad_host() {
     for template in [
         "http:///{database}",
@@ -115,7 +108,6 @@ fn rejects_a_bad_host() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn rejects_a_bad_port() {
     for template in [
         "http://h:/{database}",
@@ -131,7 +123,6 @@ fn rejects_a_bad_port() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn rejects_unknown_and_unbalanced_placeholders() {
     for (template, expected) in [
         ("http://h/{databse}", "placeholder"),
@@ -146,7 +137,6 @@ fn rejects_unknown_and_unbalanced_placeholders() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn rejects_characters_that_cannot_be_in_a_request_target() {
     for template in [
         "http://h/a b/{database}",
@@ -160,7 +150,6 @@ fn rejects_characters_that_cannot_be_in_a_request_target() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn fills_in_percent_encoded_values() {
     let template = Template::parse("http://h/{database}?user={user}").unwrap();
     for (value, encoded) in [
@@ -186,7 +175,6 @@ fn fills_in_percent_encoded_values() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn text_of_the_template_is_not_encoded() {
     let template = Template::parse("http://h/a%20b/~x/{database}?k=v&l=w").unwrap();
     assert_eq!(template.fill("d", "u").target, "/a%20b/~x/d?k=v&l=w");
@@ -314,7 +302,6 @@ async fn failure(stub: &Stub) -> String {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 async fn finds_a_class_in_a_body_with_a_content_length() {
     let body = MINIMAL.as_bytes();
     let stub = stub(Behaviour::Reply(reply(
@@ -330,7 +317,6 @@ async fn finds_a_class_in_a_body_with_a_content_length() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 async fn finds_a_class_in_a_chunked_body() {
     let (first, second) = MINIMAL.as_bytes().split_at(40);
     let (second, third) = second.split_at(30);
@@ -344,7 +330,6 @@ async fn finds_a_class_in_a_chunked_body() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 async fn a_chunked_body_wins_over_a_content_length() {
     let stub = stub(Behaviour::Reply(reply(
         "200 OK",
@@ -356,14 +341,12 @@ async fn a_chunked_body_wins_over_a_content_length() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 async fn finds_a_class_in_a_body_that_ends_with_the_connection() {
     let stub = stub(Behaviour::Reply(reply("200 OK", &[], MINIMAL.as_bytes()))).await;
     assert_eq!(ask(&stub).await, Lookup::Found(Box::new(minimal())));
 }
 
 #[tokio::test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 async fn requests_with_get_and_asks_for_the_connection_to_close() {
     let stub = stub(Behaviour::Reply(sized("404 Not Found", b""))).await;
     lookup(&stub.template, "a/b", "x y", TIMEOUT).await;
@@ -382,14 +365,12 @@ async fn requests_with_get_and_asks_for_the_connection_to_close() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 async fn a_404_is_not_found() {
     let stub = stub(Behaviour::Reply(sized("404 Not Found", b"no such class"))).await;
     assert_eq!(ask(&stub).await, Lookup::NotFound);
 }
 
 #[tokio::test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 async fn a_500_fails_and_its_body_is_in_the_reason() {
     let stub = stub(Behaviour::Reply(sized(
         "500 Internal Server Error",
@@ -403,7 +384,6 @@ async fn a_500_fails_and_its_body_is_in_the_reason() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 async fn other_statuses_fail_even_with_a_class_in_the_body() {
     for status in [
         "201 Created",
@@ -418,7 +398,6 @@ async fn other_statuses_fail_even_with_a_class_in_the_body() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 async fn only_the_start_of_a_long_error_body_is_in_the_reason() {
     let body = "x".repeat(10_000);
     let stub = stub(Behaviour::Reply(sized("502 Bad Gateway", body.as_bytes()))).await;
@@ -428,7 +407,6 @@ async fn only_the_start_of_a_long_error_body_is_in_the_reason() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 async fn a_refused_connection_fails() {
     // The port is free once the listener is gone.
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -442,7 +420,6 @@ async fn a_refused_connection_fails() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 async fn a_server_that_never_answers_times_out() {
     let stub = stub(Behaviour::Silence).await;
     let started = Instant::now();
@@ -461,7 +438,6 @@ async fn a_server_that_never_answers_times_out() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 async fn the_timeout_is_for_the_whole_request() {
     // Every byte arrives in time, but the answer never ends.
     let stub = stub(Behaviour::Trickle).await;
@@ -478,7 +454,6 @@ async fn the_timeout_is_for_the_whole_request() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 async fn a_body_of_1_mib_is_read_and_a_larger_one_fails() {
     const MIB: usize = 1024 * 1024;
     let padded = |size: usize| {
@@ -496,7 +471,6 @@ async fn a_body_of_1_mib_is_read_and_a_larger_one_fails() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 async fn a_body_without_a_length_of_1_mib_is_read_and_one_byte_more_fails() {
     const MIB: usize = 1024 * 1024;
     let padded = |size: usize| {
@@ -514,7 +488,6 @@ async fn a_body_without_a_length_of_1_mib_is_read_and_one_byte_more_fails() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 async fn a_chunked_body_or_one_without_a_length_over_1_mib_fails() {
     let big = vec![b' '; 600 * 1024];
     let chunked_body = reply(
@@ -530,7 +503,6 @@ async fn a_chunked_body_or_one_without_a_length_over_1_mib_fails() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 async fn invalid_json_fails() {
     let stub = stub(Behaviour::Reply(sized("200 OK", b"<html>sorry</html>"))).await;
     let reason = failure(&stub).await;
@@ -538,7 +510,6 @@ async fn invalid_json_fails() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 async fn an_invalid_class_fails() {
     let stub = stub(Behaviour::Reply(sized("200 OK", b"{\"name\": \"x\"}"))).await;
     let reason = failure(&stub).await;
@@ -546,7 +517,6 @@ async fn an_invalid_class_fails() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 async fn a_class_for_another_database_fails() {
     let stub = stub(Behaviour::Reply(sized("200 OK", MINIMAL.as_bytes()))).await;
     let result = lookup(&stub.template, "other-7", "authenticator", TIMEOUT).await;
@@ -554,7 +524,6 @@ async fn a_class_for_another_database_fails() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 async fn malformed_or_incomplete_answers_fail() {
     for answer in [
         &b""[..],
@@ -618,7 +587,6 @@ fn parse_error(body: &[u8], database: &str) -> String {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn parses_a_minimal_class() {
     assert_eq!(
         parse_class(MINIMAL.as_bytes(), "tenant-7").unwrap(),
@@ -627,7 +595,6 @@ fn parses_a_minimal_class() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn parses_a_class_with_every_field() {
     let body = json!({
         "name": "big_tenants-2_v1",
@@ -705,7 +672,6 @@ fn parses_a_class_with_every_field() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn refuses_what_is_not_json() {
     for body in ["", "{", "not json", "<html></html>"] {
         let error = parse_error(body.as_bytes(), "tenant-7");
@@ -716,7 +682,6 @@ fn refuses_what_is_not_json() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn refuses_json_that_is_not_a_class() {
     for body in ["[]", "null", "\"tenants\"", "{}", "{\"name\": 1}"] {
         let error = parse_error(body.as_bytes(), "tenant-7");
@@ -725,7 +690,6 @@ fn refuses_json_that_is_not_a_class() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn refuses_unknown_fields() {
     for changes in [
         json!({"colour": "blue"}),
@@ -739,7 +703,6 @@ fn refuses_unknown_fields() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn refuses_a_recording() {
     for recording in [
         json!("tenants.jsonl"),
@@ -754,7 +717,6 @@ fn refuses_a_recording() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn accepts_names_of_letters_digits_and_a_few_signs() {
     for name in [
         "a",
@@ -772,7 +734,6 @@ fn accepts_names_of_letters_digits_and_a_few_signs() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn refuses_a_dot_in_a_name_so_that_no_class_has_the_files_of_another() {
     // `a` has its times in `a.times.jsonl`, which would be the recording of a
     // class named `a.times`.
@@ -786,7 +747,6 @@ fn refuses_a_dot_in_a_name_so_that_no_class_has_the_files_of_another() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn refuses_names_that_cannot_name_a_file() {
     for name in [
         "",
@@ -812,7 +772,6 @@ fn refuses_names_that_cannot_name_a_file() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn a_name_is_at_most_200_bytes_so_that_its_files_fit_a_file_name() {
     let name = "n".repeat(200);
     let body = minimal_with(json!({ "name": name }));
@@ -825,7 +784,6 @@ fn a_name_is_at_most_200_bytes_so_that_its_files_fit_a_file_name() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn refuses_databases_that_do_not_match_the_one_asked_about() {
     for (pattern, database, matches) in [
         ("tenant-*", "tenant-7", true),
@@ -857,7 +815,6 @@ fn refuses_databases_that_do_not_match_the_one_asked_about() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn refuses_a_class_without_an_upstream() {
     let mut class: Value = serde_json::from_str(MINIMAL).unwrap();
     class.as_object_mut().unwrap().remove("upstream");
@@ -868,7 +825,6 @@ fn refuses_a_class_without_an_upstream() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn refuses_invalid_settings() {
     for (settings, field) in [
         (json!({"execution_scale": -1.0}), "execution_scale"),
@@ -888,7 +844,6 @@ fn refuses_invalid_settings() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn refuses_durations_that_are_not_humantime_strings() {
     for round_trip in [json!(500), json!("soon"), json!("-1s")] {
         let body = minimal_with(json!({ "settings": { "round_trip": round_trip } }));
@@ -898,7 +853,6 @@ fn refuses_durations_that_are_not_humantime_strings() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn refuses_an_empty_prefix_of_statements_that_ignore_parameters() {
     let body = minimal_with(json!({ "ignore_parameters": ["select set_config(", ""] }));
     let error = parse_error(&body, "tenant-7");
@@ -930,7 +884,6 @@ fn join_lines(schema: &mut Schema) {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn the_committed_schema_is_the_current_one() {
     let current = format!("{}\n", serde_json::to_string_pretty(&schema()).unwrap());
     if std::env::var("UPDATE_SCHEMA").is_ok_and(|value| value == "1") {
@@ -951,7 +904,6 @@ fn definition<'a>(schema: &'a Value, name: &str) -> &'a Value {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn the_schema_is_draft_2020_12_with_a_title() {
     let schema = schema();
     assert_eq!(
@@ -963,7 +915,6 @@ fn the_schema_is_draft_2020_12_with_a_title() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn the_schema_has_no_recording() {
     let schema = schema();
     assert!(schema["properties"].get("name").is_some());
@@ -974,7 +925,6 @@ fn the_schema_has_no_recording() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn the_schema_refuses_unknown_properties_everywhere() {
     let schema = schema();
     assert_eq!(schema["additionalProperties"], false);
@@ -994,7 +944,6 @@ fn the_schema_refuses_unknown_properties_everywhere() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn the_schema_has_the_pattern_of_names_and_requires_the_upstream() {
     let schema = schema();
     assert_eq!(schema["properties"]["name"]["pattern"], NAME_PATTERN);
@@ -1012,7 +961,6 @@ fn the_schema_has_the_pattern_of_names_and_requires_the_upstream() {
 }
 
 #[test]
-#[ignore = "xfail: the class service client is not implemented yet"]
 fn the_schema_has_durations_as_strings_and_says_so() {
     let schema = schema();
     for (definition_name, field, nullable) in [

@@ -20,7 +20,7 @@ mod pattern;
 #[cfg(test)]
 mod tests;
 
-use pattern::Pattern;
+pub(crate) use pattern::Pattern;
 
 const SHARDS: usize = 64;
 

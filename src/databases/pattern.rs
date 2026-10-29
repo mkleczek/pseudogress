@@ -1,7 +1,7 @@
 //! Database name patterns, where `*` matches any characters.
 
 /// The text between the stars, so that matching a name allocates nothing.
-pub(super) struct Pattern {
+pub(crate) struct Pattern {
     /// Before the first star; the whole pattern when it has none.
     first: Box<str>,
     /// After each star. Empty when the pattern has no star.
@@ -9,7 +9,7 @@ pub(super) struct Pattern {
 }
 
 impl Pattern {
-    pub(super) fn new(pattern: &str) -> Self {
+    pub(crate) fn new(pattern: &str) -> Self {
         let mut parts = pattern.split('*');
         Pattern {
             first: parts.next().unwrap_or_default().into(),
@@ -17,7 +17,7 @@ impl Pattern {
         }
     }
 
-    pub(super) fn matches(&self, name: &str) -> bool {
+    pub(crate) fn matches(&self, name: &str) -> bool {
         let Some((last, middle)) = self.rest.split_last() else {
             return *name == *self.first;
         };
