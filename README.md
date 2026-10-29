@@ -15,7 +15,7 @@ latency and faults.
 
 ## Status
 
-Version 0.1.0, the first release. It is built to load-test multi-tenant
+Version 0.1.1. It is built to load-test multi-tenant
 PostgREST, and its configuration and recording format may still change
 before 1.0.
 
@@ -72,7 +72,7 @@ nix run github:mkleczek/pseudogress -- replay pseudogress.toml
 
 To pin a version, add a tag or a commit to the URL:
 `github:mkleczek/pseudogress/<tag>` or `github:mkleczek/pseudogress/<commit>`.
-Only commits after v0.1.0 have a `flake.nix`.
+Releases from v0.1.1 on have a `flake.nix`; v0.1.0 doesn't.
 
 As a flake input, your `flake.lock` pins the commit, and the overlay adds
 `pkgs.pseudogress`; the package is also
