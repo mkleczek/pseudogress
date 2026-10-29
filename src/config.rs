@@ -483,6 +483,106 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "xfail: the class service client is not implemented yet"]
+    fn loading_refuses_a_class_without_a_recording_naming_the_class() {
+        let dir =
+            std::env::temp_dir().join(format!("pseudogress-recording-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("pseudogress.toml");
+        let text = |recording: &str| {
+            format!(
+                "listen = []\n[[class]]\nname = \"small\"\ndatabases = \"*\"\nusers = []\n{recording}"
+            )
+        };
+        std::fs::write(&path, text("recording = \"small.jsonl\"\n")).unwrap();
+        assert!(load(&path).is_ok());
+        std::fs::write(&path, text("")).unwrap();
+        let error = load(&path).unwrap_err();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(error.contains("class small"), "{error}");
+        assert!(error.contains("recording"), "{error}");
+    }
+
+    #[test]
+    #[ignore = "xfail: the class service client is not implemented yet"]
+    fn a_class_has_no_recording_until_it_is_given_one() {
+        let class: Class = toml::from_str("name = \"c\"\ndatabases = \"*\"\nusers = []").unwrap();
+        assert_eq!(class.recording, PathBuf::new());
+    }
+
+    /// What the file of the service's classes is made of.
+    #[derive(Debug, PartialEq, Deserialize, Serialize)]
+    struct Classes {
+        #[serde(rename = "class")]
+        classes: Vec<Class>,
+    }
+
+    #[test]
+    #[ignore = "xfail: the class service client is not implemented yet"]
+    fn classes_written_as_toml_read_back_equal() {
+        let minimal = Class {
+            name: "minimal".into(),
+            databases: "minimal-*".into(),
+            users: vec![],
+            password: None,
+            recording: "minimal.jsonl".into(),
+            upstream: None,
+            ignore_parameters: vec![],
+            max_connections: None,
+            column_override: None,
+            settings: Settings::default(),
+        };
+        let full = Class {
+            name: "full".into(),
+            databases: "full-*".into(),
+            users: vec!["authenticator".into(), "anon".into()],
+            password: Some("secret".into()),
+            recording: "full.jsonl".into(),
+            upstream: Some(Upstream {
+                host: "db.internal".into(),
+                port: 6432,
+                user: "postgres".into(),
+                password: Some("upstream secret".into()),
+                database: "{database}".into(),
+            }),
+            ignore_parameters: vec!["select set_config(".into()],
+            max_connections: Some(60),
+            column_override: Some(ColumnOverride {
+                column: "payload".into(),
+                bytes: 4096,
+            }),
+            settings: Settings {
+                round_trip: Duration::from_micros(500),
+                execution_scale: 0.5,
+                execution: Some(Execution {
+                    median: Duration::from_millis(1),
+                    p99: Duration::from_millis(20),
+                }),
+                execution_per_mib: Duration::from_micros(250),
+                faults: Faults {
+                    refuse: 0.01,
+                    hang: 0.02,
+                    reject_password: 0.03,
+                    reset: 0.04,
+                    stall: 0.05,
+                    stall_for: Duration::from_secs(2),
+                    statement_timeout: Some(Duration::from_secs(30)),
+                },
+            },
+        };
+        let classes = Classes {
+            classes: vec![minimal, full],
+        };
+        let text = toml::to_string(&classes).unwrap();
+        assert_eq!(text.matches("[[class]]").count(), 2, "{text}");
+        assert!(text.contains("recording = \"full.jsonl\""), "{text}");
+        assert_eq!(toml::from_str::<Classes>(&text).unwrap(), classes, "{text}");
+        let empty = Classes { classes: vec![] };
+        let text = toml::to_string(&empty).unwrap();
+        assert_eq!(toml::from_str::<Classes>(&text).unwrap(), empty, "{text}");
+    }
+
+    #[test]
     fn refuses_unknown_settings() {
         let error = toml::from_str::<Settings>("round_trp = \"1ms\"").unwrap_err();
         assert!(error.to_string().contains("round_trp"), "{error}");

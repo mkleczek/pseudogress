@@ -12,6 +12,8 @@ use crate::config;
 
 mod http;
 mod template;
+#[cfg(test)]
+mod tests;
 
 pub use template::{Template, Url};
 
