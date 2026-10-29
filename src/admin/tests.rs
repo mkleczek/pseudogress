@@ -21,6 +21,12 @@ name = "small"
 databases = "small-*"
 users = ["authenticator"]
 recording = "recordings/small.jsonl"
+
+[[class]]
+name = "large"
+databases = "large-*"
+users = ["authenticator"]
+recording = "recordings/large.jsonl"
 "#;
 
 struct Admin {
@@ -86,6 +92,32 @@ async fn next_event(connection: &mut Connection) -> Event {
     tokio::time::timeout(Duration::from_secs(5), connection.event())
         .await
         .expect("the connection gets an event")
+}
+
+#[tokio::test]
+#[ignore = "xfail: GET /classes is not implemented yet"]
+async fn get_classes_lists_the_classes_in_matching_order() {
+    let admin = start().await;
+    let (head, body) = send(&admin, "GET", "/classes", "").await;
+    assert_status(&head, 200);
+    assert!(head.contains("Content-Type: application/json"), "{head}");
+    assert_eq!(
+        parse(&body),
+        json!([
+            {"name": "small", "databases": "small-*", "source": "config"},
+            {"name": "large", "databases": "large-*", "source": "config"},
+        ])
+    );
+}
+
+#[tokio::test]
+#[ignore = "xfail: GET /classes is not implemented yet"]
+async fn classes_are_listed_and_not_changed_with_other_methods() {
+    let admin = start().await;
+    for method in ["POST", "PUT", "DELETE"] {
+        let (head, _) = send(&admin, method, "/classes", "[]").await;
+        assert_status(&head, 405);
+    }
 }
 
 #[tokio::test]

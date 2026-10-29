@@ -805,6 +805,275 @@ fn a_directory_of_recordings_that_cannot_be_created_fails_at_startup() {
     assert!(error.contains("file"), "{error}");
 }
 
+// The admin API and the metrics.
+
+/// Serves the admin API of `server` on a free port.
+async fn admin(server: &Server) -> SocketAddr {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let shared = &server.shared;
+    tokio::spawn(crate::admin::serve(
+        listener,
+        shared.classes.clone(),
+        shared.databases.clone(),
+    ));
+    address
+}
+
+/// The body of the answer to a `GET` of the admin API.
+async fn get(admin: SocketAddr, path: &str) -> String {
+    let mut stream = TcpStream::connect(admin).await.unwrap();
+    let request = format!("GET {path} HTTP/1.1\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).await.unwrap();
+    let (head, body) = response.split_once("\r\n\r\n").expect("an HTTP response");
+    assert!(head.starts_with("HTTP/1.1 200 "), "GET {path}: {head}");
+    body.to_owned()
+}
+
+/// What `GET /classes` says.
+async fn listed(admin: SocketAddr) -> Value {
+    serde_json::from_str(&get(admin, "/classes").await).unwrap()
+}
+
+/// The value of the sample of `series`, such as `name{label="value"}`.
+fn sample(metrics: &str, series: &str) -> f64 {
+    metrics
+        .lines()
+        .find_map(|line| line.strip_prefix(series)?.strip_prefix(' '))
+        .unwrap_or_else(|| panic!("no {series} in the metrics:\n{metrics}"))
+        .parse()
+        .unwrap()
+}
+
+/// How many lookups ended with `result`.
+fn lookups(metrics: &str, result: &str) -> f64 {
+    sample(
+        metrics,
+        &format!("pseudogress_class_lookups_total{{result=\"{result}\"}}"),
+    )
+}
+
+/// Looks `database` up as a connection to it does.
+async fn load(server: &Server, database: &str) -> Result<(), LoadError> {
+    let loader = server.shared.loader.as_ref().unwrap();
+    loader.load(&server.shared, database, USER).await
+}
+
+#[tokio::test]
+#[ignore = "xfail: GET /classes is not implemented yet"]
+async fn the_admin_api_lists_the_classes_of_the_service_after_those_of_the_configuration() {
+    let stub = Stub::start(Duration::ZERO).await;
+    for (database, name) in [("b-1", "b"), ("a-1", "a")] {
+        let databases = format!("{name}-*");
+        stub.say(
+            database,
+            Answer::Class(class_json(name, &databases, closed_port())),
+        );
+    }
+    let server = start(
+        &stub,
+        closed_port(),
+        &[("app", "app-*"), ("web", "web-*")],
+        4,
+    )
+    .await;
+    let admin = admin(&server).await;
+    let configured = [
+        json!({"name": "app", "databases": "app-*", "source": "config"}),
+        json!({"name": "web", "databases": "web-*", "source": "config"}),
+    ];
+    assert_eq!(listed(admin).await, json!(configured));
+
+    // Added in this order, which is the order of matching.
+    load(&server, "b-1").await.unwrap();
+    load(&server, "a-1").await.unwrap();
+    // A database that the service doesn't know adds nothing.
+    assert_eq!(load(&server, "nobody-1").await, Err(LoadError::NotFound));
+
+    let [app, web] = configured;
+    assert_eq!(
+        listed(admin).await,
+        json!([
+            app,
+            web,
+            {"name": "b", "databases": "b-*", "source": "service"},
+            {"name": "a", "databases": "a-*", "source": "service"},
+        ])
+    );
+}
+
+#[tokio::test]
+#[ignore = "xfail: the lookup metrics are not implemented yet"]
+async fn the_lookup_metrics_start_at_zero_with_a_class_service() {
+    let stub = Stub::start(Duration::ZERO).await;
+    let server = start(&stub, closed_port(), &[("app", "app-*")], 4).await;
+    let admin = admin(&server).await;
+
+    let metrics = get(admin, "/metrics").await;
+
+    for result in ["found", "not_found", "error"] {
+        assert_eq!(lookups(&metrics, result), 0.0, "{result}");
+    }
+    assert_eq!(
+        sample(&metrics, "pseudogress_class_lookup_seconds_count"),
+        0.0
+    );
+    assert!(
+        metrics.contains("# TYPE pseudogress_class_lookups_total counter"),
+        "{metrics}"
+    );
+    // The metrics of the classes are still there.
+    assert_eq!(
+        sample(&metrics, r#"pseudogress_connections{class="app"}"#),
+        0.0
+    );
+}
+
+#[tokio::test]
+#[ignore = "xfail: the lookup metrics are not implemented yet"]
+async fn lookups_are_counted_by_their_result() {
+    let stub = Stub::start(Duration::ZERO).await;
+    stub.say("a-1", Answer::Class(class_json("a", "a-*", closed_port())));
+    stub.say(
+        "broken-1",
+        Answer::Status("503 Service Unavailable", "try later"),
+    );
+    stub.say("garbled-1", Answer::Status("200 OK", "not a class"));
+    let server = start(&stub, closed_port(), &[], 4).await;
+    let admin = admin(&server).await;
+
+    assert_eq!(load(&server, "a-1").await, Ok(()));
+    // The class that was added matches it: nothing is looked up.
+    assert_eq!(load(&server, "a-2").await, Ok(()));
+    // A database that wasn't found is looked up each time.
+    assert_eq!(load(&server, "nobody-1").await, Err(LoadError::NotFound));
+    assert_eq!(load(&server, "nobody-1").await, Err(LoadError::NotFound));
+    // Whatever goes wrong, from the status to the class, is an error.
+    assert!(load(&server, "broken-1").await.is_err());
+    assert!(load(&server, "garbled-1").await.is_err());
+
+    assert_eq!(stub.requests().len(), 5);
+    let metrics = get(admin, "/metrics").await;
+    assert_eq!(lookups(&metrics, "found"), 1.0);
+    assert_eq!(lookups(&metrics, "not_found"), 2.0);
+    assert_eq!(lookups(&metrics, "error"), 2.0);
+    assert_eq!(
+        sample(&metrics, "pseudogress_class_lookup_seconds_count"),
+        5.0
+    );
+}
+
+#[tokio::test]
+#[ignore = "xfail: the lookup metrics are not implemented yet"]
+async fn a_class_that_cannot_be_added_is_an_error_not_a_found_class() {
+    let stub = Stub::start(Duration::ZERO).await;
+    for (database, name) in [("a-1", "a"), ("b-1", "b")] {
+        let databases = format!("{name}-*");
+        stub.say(
+            database,
+            Answer::Class(class_json(name, &databases, closed_port())),
+        );
+    }
+    let server = start(&stub, closed_port(), &[], 1).await;
+    let admin = admin(&server).await;
+
+    assert_eq!(load(&server, "a-1").await, Ok(()));
+    assert!(load(&server, "b-1").await.is_err());
+
+    let metrics = get(admin, "/metrics").await;
+    assert_eq!(lookups(&metrics, "found"), 1.0);
+    assert_eq!(lookups(&metrics, "error"), 1.0);
+}
+
+#[tokio::test]
+#[ignore = "xfail: the lookup metrics are not implemented yet"]
+async fn the_callers_that_wait_for_a_shared_lookup_are_not_counted() {
+    // Slow enough for every caller to arrive before the answer.
+    let stub = Stub::start(Duration::from_millis(300)).await;
+    stub.say("a-1", Answer::Class(class_json("a", "a-*", closed_port())));
+    stub.say("broken-1", Answer::Status("500 Internal Server Error", ""));
+    let server = start(&stub, closed_port(), &[], 4).await;
+    let admin = admin(&server).await;
+
+    let mut loading = JoinSet::new();
+    for database in ["a-1", "nobody-1", "broken-1"] {
+        for _ in 0..4 {
+            let shared = server.shared.clone();
+            loading.spawn(async move {
+                let loader = shared.loader.as_ref().unwrap();
+                (database, loader.load(&shared, database, USER).await)
+            });
+        }
+    }
+    while let Some(done) = loading.join_next().await {
+        // Every caller gets the outcome of the one request.
+        match done.unwrap() {
+            ("a-1", outcome) => assert_eq!(outcome, Ok(())),
+            ("nobody-1", outcome) => assert_eq!(outcome, Err(LoadError::NotFound)),
+            ("broken-1", outcome) => assert!(matches!(outcome, Err(LoadError::Failed(_)))),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    assert_eq!(stub.requests().len(), 3, "{:?}", stub.requests());
+    let metrics = get(admin, "/metrics").await;
+    assert_eq!(lookups(&metrics, "found"), 1.0);
+    assert_eq!(lookups(&metrics, "not_found"), 1.0);
+    assert_eq!(lookups(&metrics, "error"), 1.0);
+    assert_eq!(
+        sample(&metrics, "pseudogress_class_lookup_seconds_count"),
+        3.0
+    );
+}
+
+#[tokio::test]
+#[ignore = "xfail: the lookup metrics are not implemented yet"]
+async fn the_durations_of_lookups_are_a_histogram_like_the_others() {
+    let stub = Stub::start(Duration::from_millis(100)).await;
+    stub.say("a-1", Answer::Class(class_json("a", "a-*", closed_port())));
+    let server = start(&stub, closed_port(), &[("app", "app-*")], 4).await;
+    let admin = admin(&server).await;
+    load(&server, "a-1").await.unwrap();
+
+    let metrics = get(admin, "/metrics").await;
+
+    let name = "pseudogress_class_lookup_seconds";
+    assert_eq!(metrics.matches(&format!("# HELP {name} ")).count(), 1);
+    assert_eq!(
+        metrics.matches(&format!("# TYPE {name} histogram")).count(),
+        1
+    );
+    // The buckets of the histograms of classes, without the class: 31 powers
+    // of two of nanoseconds, and +Inf, each counting what the ones before do.
+    let prefix = format!("{name}_bucket{{le=\"");
+    let buckets: Vec<(&str, u64)> = metrics
+        .lines()
+        .filter_map(|line| {
+            let (le, count) = line.strip_prefix(&prefix)?.split_once("\"} ")?;
+            Some((le, count.parse().unwrap()))
+        })
+        .collect();
+    assert_eq!(buckets.len(), 32, "{buckets:?}");
+    assert_eq!(buckets[0].0, "0.000000002");
+    assert_eq!(buckets[30].0, "2.147483648");
+    assert_eq!(buckets[31].0, "+Inf");
+    assert!(
+        buckets.windows(2).all(|pair| pair[0].1 <= pair[1].1),
+        "{buckets:?}"
+    );
+    // The service took 100 ms to answer, so no smaller bucket has the lookup.
+    for (le, count) in &buckets[..31] {
+        if le.parse::<f64>().unwrap() < 0.1 {
+            assert_eq!(*count, 0, "le={le}");
+        }
+    }
+    assert_eq!(buckets[31].1, 1);
+    assert_eq!(sample(&metrics, &format!("{name}_count")), 1.0);
+    assert!(sample(&metrics, &format!("{name}_sum")) >= 0.1, "{metrics}");
+}
+
 // Replay.
 
 #[tokio::test]

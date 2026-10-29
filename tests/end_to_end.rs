@@ -252,6 +252,112 @@ async fn class_service(postgres_port: u16) -> (u16, Arc<AtomicUsize>) {
     (port, requests)
 }
 
+/// The classes and the lookups that the admin API shows of a process with a
+/// class service, as the process wires them. PostgreSQL isn't needed: the
+/// upstream of the service's class is a port nobody listens on, which fails a
+/// connection only after its class was added.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "xfail: GET /classes and the lookup metrics are not implemented yet"]
+async fn the_admin_api_shows_the_classes_and_lookups_of_a_class_service() {
+    let dir = std::env::temp_dir().join(format!("pseudogress-e2e-admin-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let (service, requests) = class_service(free_port()).await;
+    let config = dir.join("pseudogress.toml");
+    fs::write(&config, record_config(&dir)).unwrap();
+    let url = format!("http://127.0.0.1:{service}/classes/{{database}}?user={{user}}");
+    let recordings = dir.join("recordings");
+    let flags = [
+        "--class-url",
+        &url,
+        "--recordings",
+        recordings.to_str().unwrap(),
+    ];
+    let mut record = Pseudogress::spawn("record", &config, &flags, &dir.join("record.log"));
+    let (listen, admin) = record.wait_until_listening();
+
+    // The service has the class of `svc-*`, and no database `other-0`. The
+    // class was added by the first connection and covers the second.
+    for database in ["svc-0", "svc-1", "other-0"] {
+        assert!(try_connect(listen.port(), database).await.is_err());
+    }
+
+    assert_eq!(requests.load(Relaxed), 2);
+    let classes: serde_json::Value =
+        serde_json::from_str(&admin_get(admin, "/classes").await).unwrap();
+    assert_eq!(
+        classes,
+        serde_json::json!([
+            {"name": "app", "databases": "app-*", "source": "config"},
+            {"name": "svc", "databases": "svc-*", "source": "service"},
+        ])
+    );
+    let metrics = admin_get(admin, "/metrics").await;
+    for line in [
+        r#"pseudogress_class_lookups_total{result="found"} 1"#,
+        r#"pseudogress_class_lookups_total{result="not_found"} 1"#,
+        r#"pseudogress_class_lookups_total{result="error"} 0"#,
+        "pseudogress_class_lookup_seconds_count 2",
+    ] {
+        assert!(metrics.lines().any(|l| l == line), "{line} in:\n{metrics}");
+    }
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Without a class service there are no lookups to count, so the metrics have
+/// none of theirs, in either mode; `GET /classes` lists the configuration's.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "xfail: GET /classes is not implemented yet"]
+async fn without_a_class_service_the_admin_api_lists_the_classes_and_has_no_lookup_metrics() {
+    let dir =
+        std::env::temp_dir().join(format!("pseudogress-e2e-nolookups-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let record_config = record_config(&dir);
+    let replay_config = "listen = [\"127.0.0.1:0\"]\nadmin = \"127.0.0.1:0\"\nclass = []\n";
+    for (mode, config, classes) in [
+        (
+            "record",
+            record_config.as_str(),
+            serde_json::json!([{"name": "app", "databases": "app-*", "source": "config"}]),
+        ),
+        ("replay", replay_config, serde_json::json!([])),
+    ] {
+        let path = dir.join(format!("{mode}.toml"));
+        fs::write(&path, config).unwrap();
+        let mut process = Pseudogress::spawn(mode, &path, &[], &dir.join(format!("{mode}.log")));
+        let (_, admin) = process.wait_until_listening();
+
+        let listed: serde_json::Value =
+            serde_json::from_str(&admin_get(admin, "/classes").await).unwrap();
+        assert_eq!(listed, classes, "{mode}");
+        let metrics = admin_get(admin, "/metrics").await;
+        assert!(
+            !metrics.contains("pseudogress_class_lookup"),
+            "{mode}:\n{metrics}"
+        );
+    }
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The configuration of record mode in `dir`: the class `app`, whose upstream
+/// is a port nobody listens on, and an admin API.
+fn record_config(dir: &Path) -> String {
+    format!(
+        r#"listen = ["127.0.0.1:0"]
+admin = "127.0.0.1:0"
+secret = "{SECRET}"
+
+[[class]]
+name = "app"
+databases = "app-*"
+users = ["{USER}"]
+recording = "{recording}"
+upstream = {{ host = "127.0.0.1", port = {upstream}, user = "postgres", database = "app" }}
+"#,
+        recording = dir.join("app.jsonl").display(),
+        upstream = free_port()
+    )
+}
+
 #[test]
 fn replay_with_a_directory_of_recordings_needs_its_classes_file() {
     let dir = std::env::temp_dir().join(format!("pseudogress-e2e-nofile-{}", std::process::id()));
@@ -418,6 +524,12 @@ async fn connect_all(port: u16) -> Vec<(String, Client)> {
 }
 
 async fn connect(port: u16, database: &str) -> Client {
+    try_connect(port, database)
+        .await
+        .unwrap_or_else(|error| panic!("connecting to {database}: {error}"))
+}
+
+async fn try_connect(port: u16, database: &str) -> Result<Client, tokio_postgres::Error> {
     let mut config = tokio_postgres::Config::new();
     config
         .host("127.0.0.1")
@@ -425,13 +537,10 @@ async fn connect(port: u16, database: &str) -> Client {
         .user(USER)
         .dbname(database)
         .password(derived_password(database));
-    let (client, connection) = config
-        .connect(NoTls)
-        .await
-        .unwrap_or_else(|error| panic!("connecting to {database}: {error}"));
+    let (client, connection) = config.connect(NoTls).await?;
     // Ends when the client is dropped.
     tokio::spawn(connection);
-    client
+    Ok(client)
 }
 
 /// What `auth::derive_password` documents: the hex of the HMAC-SHA-256 of
