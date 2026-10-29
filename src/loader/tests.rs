@@ -816,6 +816,7 @@ async fn admin(server: &Server) -> SocketAddr {
         listener,
         shared.classes.clone(),
         shared.databases.clone(),
+        shared.loader.as_ref().map(Loader::metrics),
     ));
     address
 }
@@ -862,7 +863,6 @@ async fn load(server: &Server, database: &str) -> Result<(), LoadError> {
 }
 
 #[tokio::test]
-#[ignore = "xfail: GET /classes is not implemented yet"]
 async fn the_admin_api_lists_the_classes_of_the_service_after_those_of_the_configuration() {
     let stub = Stub::start(Duration::ZERO).await;
     for (database, name) in [("b-1", "b"), ("a-1", "a")] {
@@ -905,7 +905,6 @@ async fn the_admin_api_lists_the_classes_of_the_service_after_those_of_the_confi
 }
 
 #[tokio::test]
-#[ignore = "xfail: the lookup metrics are not implemented yet"]
 async fn the_lookup_metrics_start_at_zero_with_a_class_service() {
     let stub = Stub::start(Duration::ZERO).await;
     let server = start(&stub, closed_port(), &[("app", "app-*")], 4).await;
@@ -932,7 +931,6 @@ async fn the_lookup_metrics_start_at_zero_with_a_class_service() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the lookup metrics are not implemented yet"]
 async fn lookups_are_counted_by_their_result() {
     let stub = Stub::start(Duration::ZERO).await;
     stub.say("a-1", Answer::Class(class_json("a", "a-*", closed_port())));
@@ -966,7 +964,6 @@ async fn lookups_are_counted_by_their_result() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the lookup metrics are not implemented yet"]
 async fn a_class_that_cannot_be_added_is_an_error_not_a_found_class() {
     let stub = Stub::start(Duration::ZERO).await;
     for (database, name) in [("a-1", "a"), ("b-1", "b")] {
@@ -988,7 +985,6 @@ async fn a_class_that_cannot_be_added_is_an_error_not_a_found_class() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the lookup metrics are not implemented yet"]
 async fn the_callers_that_wait_for_a_shared_lookup_are_not_counted() {
     // Slow enough for every caller to arrive before the answer.
     let stub = Stub::start(Duration::from_millis(300)).await;
@@ -1029,7 +1025,6 @@ async fn the_callers_that_wait_for_a_shared_lookup_are_not_counted() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: the lookup metrics are not implemented yet"]
 async fn the_durations_of_lookups_are_a_histogram_like_the_others() {
     let stub = Stub::start(Duration::from_millis(100)).await;
     stub.say("a-1", Answer::Class(class_json("a", "a-*", closed_port())));

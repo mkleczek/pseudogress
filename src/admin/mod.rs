@@ -2,6 +2,8 @@
 //! terminations, the open databases and the classes' settings.
 //!
 //! - `GET /metrics`
+//! - `GET /classes`: the classes in matching order, with `"source"`
+//!   `"config"` or `"service"`
 //! - `GET /databases/{name}`
 //! - `POST /notify` with `{"channel", "payload"}` and a target
 //! - `POST /terminate` with a target
@@ -20,10 +22,10 @@ use tokio::{
 };
 
 use crate::{
-    class::{Class, Classes},
+    class::{Class, Classes, Source},
     config,
     databases::{Databases, Target},
-    metrics,
+    metrics::{self, LookupMetrics},
 };
 
 #[cfg(test)]
@@ -36,12 +38,18 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a closed connection waits for a client that is still sending.
 const LINGER: Duration = Duration::from_secs(1);
 
+/// `lookups` are the metrics of a class service, if there is one.
 pub async fn serve(
     listener: TcpListener,
     classes: Classes,
     databases: Arc<Databases>,
+    lookups: Option<Arc<LookupMetrics>>,
 ) -> std::io::Result<()> {
-    let api = Arc::new(Api { classes, databases });
+    let api = Arc::new(Api {
+        classes,
+        databases,
+        lookups,
+    });
     loop {
         let Ok((stream, _)) = listener.accept().await else {
             // Usually out of file descriptors: back off rather than stop the API.
@@ -56,6 +64,7 @@ pub async fn serve(
 struct Api {
     classes: Classes,
     databases: Arc<Databases>,
+    lookups: Option<Arc<LookupMetrics>>,
 }
 
 /// Answers one request, then closes the connection.
@@ -167,6 +176,7 @@ impl Api {
         let path: Vec<&str> = request.path.trim_start_matches('/').split('/').collect();
         match (request.method.as_str(), path.as_slice()) {
             ("GET", ["metrics"]) => self.metrics(),
+            ("GET", ["classes"]) => self.list_classes(),
             ("GET", ["databases", name]) => self.database(name),
             ("POST", ["notify"]) => self.notify(&request.body),
             ("POST", ["terminate"]) => self.terminate(&request.body),
@@ -178,6 +188,7 @@ impl Api {
                 | ["databases", _]
                 | ["notify"]
                 | ["terminate"]
+                | ["classes"]
                 | ["classes", _, "settings"],
             ) => Response::text("405 Method Not Allowed", "method not allowed"),
             _ => Response::text("404 Not Found", "not found"),
@@ -187,11 +198,27 @@ impl Api {
     fn metrics(&self) -> Response {
         let mut body = String::new();
         metrics::render(&self.classes, &mut body);
+        if let Some(lookups) = &self.lookups {
+            metrics::render_lookups(lookups, &mut body);
+        }
         Response {
             status: "200 OK",
             content_type: "text/plain; version=0.0.4",
             body,
         }
+    }
+
+    fn list_classes(&self) -> Response {
+        let classes: Vec<_> = self
+            .classes
+            .iter()
+            .map(|class| ClassInfo {
+                name: &class.name,
+                databases: &class.databases,
+                source: class.source,
+            })
+            .collect();
+        json_response(&classes)
     }
 
     fn database(&self, name: &str) -> Response {
@@ -251,6 +278,14 @@ impl Api {
     fn class(&self, name: &str) -> Option<&Class> {
         self.classes.iter().find(|class| class.name == name)
     }
+}
+
+/// What `GET /classes` shows of a class.
+#[derive(Serialize)]
+struct ClassInfo<'a> {
+    name: &'a str,
+    databases: &'a str,
+    source: Source,
 }
 
 /// A notification: its target, and the channel and payload to send.

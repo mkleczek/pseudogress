@@ -37,6 +37,22 @@ pub struct ClassMetrics {
     pub lateness: Histogram,
 }
 
+/// The lookups of a class service. A lookup is for a database that no class
+/// matches, so it is of no class, and these are not per class. They are
+/// rendered only with a class service: without one nothing is looked up, and
+/// series that stay at 0 would suggest that something could be.
+#[derive(Default)]
+pub struct LookupMetrics {
+    /// Lookups that got a class, which is added, or was before.
+    pub found: AtomicU64,
+    /// Lookups of a database that the service doesn't know.
+    pub not_found: AtomicU64,
+    /// Lookups that failed, or got a class that can't be added.
+    pub errors: AtomicU64,
+    /// How long the lookups took, from their request to their result.
+    pub duration: Histogram,
+}
+
 /// Durations in power-of-two buckets of nanoseconds.
 #[derive(Default)]
 pub struct Histogram {
@@ -154,6 +170,27 @@ pub fn render(classes: &Registry<Class>, out: &mut String) {
     );
 }
 
+/// Appends the metrics of the lookups of a class service to `out`.
+pub fn render_lookups(lookups: &LookupMetrics, out: &mut String) {
+    let name = "pseudogress_class_lookups_total";
+    header(
+        out,
+        name,
+        "counter",
+        "Lookups of a class in the class service.",
+    );
+    for (result, count) in [
+        ("found", &lookups.found),
+        ("not_found", &lookups.not_found),
+        ("error", &lookups.errors),
+    ] {
+        let _ = writeln!(out, "{name}{{result=\"{result}\"}} {}", count.load(Relaxed));
+    }
+    let name = "pseudogress_class_lookup_seconds";
+    header(out, name, "histogram", "How long lookups of a class took.");
+    buckets(out, name, "", &lookups.duration);
+}
+
 /// A counter or gauge, with a sample per class.
 fn family<T: Display>(
     out: &mut String,
@@ -179,26 +216,39 @@ fn histogram(
 ) {
     header(out, name, "histogram", help);
     for class in classes.iter() {
-        let histogram = value(&class.metrics);
-        let (finite, [overflow]) = histogram.buckets.split_at(31) else {
-            unreachable!("32 buckets")
-        };
-        let mut cumulative = 0;
-        for (i, bucket) in finite.iter().enumerate() {
-            cumulative += bucket.load(Relaxed);
-            let le = Duration::from_nanos(1 << (i + 1)).as_secs_f64();
-            sample_start(out, name, "_bucket", &class.name);
-            let _ = writeln!(out, ",le=\"{le}\"}} {cumulative}");
-        }
-        cumulative += overflow.load(Relaxed);
-        sample_start(out, name, "_bucket", &class.name);
-        let _ = writeln!(out, ",le=\"+Inf\"}} {cumulative}");
-        let sum = Duration::from_nanos(histogram.sum_nanos.load(Relaxed));
-        sample_start(out, name, "_sum", &class.name);
-        let _ = writeln!(out, "}} {}", sum.as_secs_f64());
-        sample_start(out, name, "_count", &class.name);
-        let _ = writeln!(out, "}} {cumulative}");
+        let mut label = String::new();
+        class_label(&mut label, &class.name);
+        buckets(out, name, &label, value(&class.metrics));
     }
+}
+
+/// The samples of a histogram's series, which has `labels`, as in `class="a"`.
+fn buckets(out: &mut String, name: &str, labels: &str, histogram: &Histogram) {
+    let (finite, [overflow]) = histogram.buckets.split_at(31) else {
+        unreachable!("32 buckets")
+    };
+    let (braced, comma) = if labels.is_empty() {
+        (String::new(), "")
+    } else {
+        (format!("{{{labels}}}"), ",")
+    };
+    let mut cumulative = 0;
+    for (i, bucket) in finite.iter().enumerate() {
+        cumulative += bucket.load(Relaxed);
+        let le = Duration::from_nanos(1 << (i + 1)).as_secs_f64();
+        let _ = writeln!(
+            out,
+            "{name}_bucket{{{labels}{comma}le=\"{le}\"}} {cumulative}"
+        );
+    }
+    cumulative += overflow.load(Relaxed);
+    let _ = writeln!(
+        out,
+        "{name}_bucket{{{labels}{comma}le=\"+Inf\"}} {cumulative}"
+    );
+    let sum = Duration::from_nanos(histogram.sum_nanos.load(Relaxed));
+    let _ = writeln!(out, "{name}_sum{braced} {}", sum.as_secs_f64());
+    let _ = writeln!(out, "{name}_count{braced} {cumulative}");
 }
 
 fn header(out: &mut String, name: &str, kind: &str, help: &str) {
@@ -208,7 +258,13 @@ fn header(out: &mut String, name: &str, kind: &str, help: &str) {
 
 /// Writes up to the class label's closing quote; the caller writes the rest.
 fn sample_start(out: &mut String, name: &str, suffix: &str, class: &str) {
-    let _ = write!(out, "{name}{suffix}{{class=\"");
+    let _ = write!(out, "{name}{suffix}{{");
+    class_label(out, class);
+}
+
+/// Writes the label `class="..."`, with the name escaped.
+fn class_label(out: &mut String, class: &str) {
+    out.push_str("class=\"");
     for c in class.chars() {
         match c {
             '\\' => out.push_str("\\\\"),

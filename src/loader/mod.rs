@@ -10,7 +10,8 @@ use std::{
     collections::{BTreeMap, HashMap},
     fs,
     path::PathBuf,
-    sync::{Mutex, MutexGuard, PoisonError},
+    sync::{Arc, Mutex, MutexGuard, PoisonError, atomic::Ordering::Relaxed},
+    time::Instant,
 };
 
 use tokio::sync::watch;
@@ -18,6 +19,7 @@ use tokio::sync::watch;
 use crate::{
     class::Class,
     config,
+    metrics::LookupMetrics,
     options::Service,
     service::{self, Lookup, Template},
     session::{Connector, Shared},
@@ -41,6 +43,8 @@ pub struct Loader {
     /// Where the classes are recorded, and `classes.toml` goes.
     recordings: PathBuf,
     max_classes: usize,
+    /// Counts the requests to the service: callers that wait for one don't.
+    metrics: Arc<LookupMetrics>,
     state: Mutex<State>,
 }
 
@@ -62,11 +66,17 @@ impl Loader {
             template: service.url,
             recordings: service.recordings,
             max_classes: service.max_classes,
+            metrics: Arc::default(),
             state: Mutex::new(State {
                 added: BTreeMap::new(),
                 lookups: HashMap::new(),
             }),
         })
+    }
+
+    /// What the lookups did, for the admin API.
+    pub fn metrics(&self) -> Arc<LookupMetrics> {
+        self.metrics.clone()
     }
 
     /// Makes a class match `database`, if the service has one. When it is
@@ -110,7 +120,15 @@ impl Loader {
             database,
             outcome: None,
         };
+        let started = Instant::now();
         let outcome = self.find(shared, database, user).await;
+        let counter = match &outcome {
+            Ok(()) => &self.metrics.found,
+            Err(LoadError::NotFound) => &self.metrics.not_found,
+            Err(LoadError::Failed(_)) => &self.metrics.errors,
+        };
+        counter.fetch_add(1, Relaxed);
+        self.metrics.duration.record(started.elapsed());
         if let Err(LoadError::Failed(reason)) = &outcome {
             eprintln!("pseudogress: class service: {database}: {reason}");
         }
@@ -173,7 +191,7 @@ impl Loader {
         // last, as they make the class reachable.
         let index = shared.connector.add_class(&class)?;
         assert_eq!(
-            shared.classes.push(Class::new(&class)),
+            shared.classes.push(Class::from_service(&class)),
             Some(index),
             "the classes are at the indexes of the connector's"
         );

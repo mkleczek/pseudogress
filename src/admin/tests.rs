@@ -43,7 +43,7 @@ async fn start() -> Admin {
     // Bound before `serve` gets it, so that no other test can take the port.
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    tokio::spawn(serve(listener, classes.clone(), databases.clone()));
+    tokio::spawn(serve(listener, classes.clone(), databases.clone(), None));
     Admin {
         address,
         classes,
@@ -95,7 +95,6 @@ async fn next_event(connection: &mut Connection) -> Event {
 }
 
 #[tokio::test]
-#[ignore = "xfail: GET /classes is not implemented yet"]
 async fn get_classes_lists_the_classes_in_matching_order() {
     let admin = start().await;
     let (head, body) = send(&admin, "GET", "/classes", "").await;
@@ -111,7 +110,6 @@ async fn get_classes_lists_the_classes_in_matching_order() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: GET /classes is not implemented yet"]
 async fn classes_are_listed_and_not_changed_with_other_methods() {
     let admin = start().await;
     for method in ["POST", "PUT", "DELETE"] {

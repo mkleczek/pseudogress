@@ -257,7 +257,6 @@ async fn class_service(postgres_port: u16) -> (u16, Arc<AtomicUsize>) {
 /// upstream of the service's class is a port nobody listens on, which fails a
 /// connection only after its class was added.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "xfail: GET /classes and the lookup metrics are not implemented yet"]
 async fn the_admin_api_shows_the_classes_and_lookups_of_a_class_service() {
     let dir = std::env::temp_dir().join(format!("pseudogress-e2e-admin-{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
@@ -306,7 +305,6 @@ async fn the_admin_api_shows_the_classes_and_lookups_of_a_class_service() {
 /// Without a class service there are no lookups to count, so the metrics have
 /// none of theirs, in either mode; `GET /classes` lists the configuration's.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "xfail: GET /classes is not implemented yet"]
 async fn without_a_class_service_the_admin_api_lists_the_classes_and_has_no_lookup_metrics() {
     let dir =
         std::env::temp_dir().join(format!("pseudogress-e2e-nolookups-{}", std::process::id()));

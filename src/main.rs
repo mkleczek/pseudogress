@@ -65,15 +65,16 @@ fn main() -> ExitCode {
     }
 }
 
-async fn run(mode: Mode, mut config: Config) -> Result<(), String> {
+async fn run(mut mode: Mode, mut config: Config) -> Result<(), String> {
     // Replay knows its classes at startup; the class service of record mode
     // adds to the classes it starts with.
-    let room = match &mode {
-        Mode::Record {
-            service: Some(service),
-        } => service.max_classes,
-        _ => 0,
+    let service = match &mut mode {
+        Mode::Record { service } => service.take(),
+        Mode::Replay { .. } => None,
     };
+    let room = service.as_ref().map_or(0, |service| service.max_classes);
+    // Made before the admin API, which shows its metrics.
+    let loader = service.map(Loader::new).transpose()?;
     if let Mode::Replay {
         recordings: Some(recordings),
     } = &mode
@@ -88,8 +89,9 @@ async fn run(mode: Mode, mut config: Config) -> Result<(), String> {
             .map_err(|e| format!("admin API on {address}: {e}"))?;
         announce("admin API", &listener);
         let (classes, databases) = (classes.clone(), databases.clone());
+        let lookups = loader.as_ref().map(Loader::metrics);
         tokio::spawn(async move {
-            if let Err(error) = admin::serve(listener, classes, databases).await {
+            if let Err(error) = admin::serve(listener, classes, databases, lookups).await {
                 eprintln!("pseudogress: admin API: {error}");
             }
         });
@@ -103,8 +105,7 @@ async fn run(mode: Mode, mut config: Config) -> Result<(), String> {
                 .await
                 .map_err(|e| e.to_string())
         }
-        Mode::Record { service } => {
-            let loader = service.map(Loader::new).transpose()?;
+        Mode::Record { .. } => {
             let record = Record::with_room(&config, room)?;
             let shared = share(&config, classes, databases, tls, record, loader);
             let listeners = listen(&config)?;
