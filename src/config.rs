@@ -10,7 +10,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// Addresses that accept PostgreSQL connections.
@@ -27,7 +27,7 @@ pub struct Config {
     pub classes: Vec<Class>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Tls {
     /// PEM file with the certificate chain.
@@ -36,9 +36,12 @@ pub struct Tls {
     pub key: PathBuf,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+#[cfg_attr(test, schemars(title = "Pseudogress class"))]
 #[serde(deny_unknown_fields)]
 pub struct Class {
+    #[cfg_attr(test, schemars(regex(pattern = crate::service::NAME_PATTERN)))]
     pub name: String,
     /// Pattern of database names, where `*` matches any characters.
     pub databases: String,
@@ -47,9 +50,13 @@ pub struct Class {
     /// Password of every user. Without it, passwords are derived from the
     /// secret, the database and the user.
     pub password: Option<String>,
-    /// Read by replay mode, written by record mode.
+    /// Read by replay mode, written by record mode. The configuration must
+    /// have it; a class service must not, as Pseudogress chooses it.
+    #[serde(default)]
+    #[cfg_attr(test, schemars(skip))]
     pub recording: PathBuf,
     /// The real PostgreSQL that record mode forwards to.
+    #[cfg_attr(test, schemars(with = "Upstream"))]
     pub upstream: Option<Upstream>,
     /// Statements whose answer doesn't depend on their parameters, by the
     /// start of their text: answered by their text alone, and recorded once.
@@ -64,7 +71,21 @@ pub struct Class {
     pub settings: Settings,
 }
 
-#[derive(Debug, Deserialize)]
+impl Class {
+    /// Checks what both the configuration and a class service's answers must
+    /// satisfy: valid settings and no empty prefix, which would match every
+    /// statement.
+    pub fn validate(&self) -> Result<(), String> {
+        self.settings.validate()?;
+        if self.ignore_parameters.iter().any(String::is_empty) {
+            return Err("ignore_parameters: a prefix must not be empty".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct Upstream {
     pub host: String,
@@ -75,7 +96,8 @@ pub struct Upstream {
     pub database: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ColumnOverride {
     pub column: String,
@@ -85,11 +107,13 @@ pub struct ColumnOverride {
 
 /// What the admin API can change while connections run.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, default)]
 pub struct Settings {
     /// Network round-trip time, added to every batch and every round trip of
     /// connection setup.
     #[serde(with = "humantime_serde")]
+    #[cfg_attr(test, schemars(with = "String"))]
     pub round_trip: Duration,
     /// Factor applied to recorded execution times.
     pub execution_scale: f64,
@@ -97,6 +121,7 @@ pub struct Settings {
     pub execution: Option<Execution>,
     /// Time added to every statement for each MiB of its answer.
     #[serde(with = "humantime_serde")]
+    #[cfg_attr(test, schemars(with = "String"))]
     pub execution_per_mib: Duration,
     pub faults: Faults,
 }
@@ -154,16 +179,20 @@ impl Settings {
 /// The times of statements: log-normal, with a given median and 99th
 /// percentile.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct Execution {
     #[serde(with = "humantime_serde")]
+    #[cfg_attr(test, schemars(with = "String"))]
     pub median: Duration,
     #[serde(with = "humantime_serde")]
+    #[cfg_attr(test, schemars(with = "String"))]
     pub p99: Duration,
 }
 
 /// Probabilities are between 0 and 1.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields, default)]
 pub struct Faults {
     /// An accepted connection is closed at once.
@@ -177,9 +206,11 @@ pub struct Faults {
     /// A batch's responses are held back for `stall_for`.
     pub stall: f64,
     #[serde(with = "humantime_serde")]
+    #[cfg_attr(test, schemars(with = "String"))]
     pub stall_for: Duration,
     /// A batch whose execution time exceeds it fails with 57014.
     #[serde(with = "humantime_serde")]
+    #[cfg_attr(test, schemars(with = "Option<String>"))]
     pub statement_timeout: Option<Duration>,
 }
 
@@ -192,13 +223,11 @@ pub fn load(path: &Path) -> Result<Config, String> {
         if !names.insert(&class.name) {
             return Err(context("name: an earlier class has it".into()));
         }
-        class.settings.validate().map_err(context)?;
-        // It would match every statement.
-        if class.ignore_parameters.iter().any(String::is_empty) {
-            return Err(context(
-                "ignore_parameters: a prefix must not be empty".into(),
-            ));
+        // The classes of a class service get theirs from Pseudogress.
+        if class.recording.as_os_str().is_empty() {
+            return Err(context("recording: required".into()));
         }
+        class.validate().map_err(context)?;
     }
     Ok(config)
 }

@@ -13,6 +13,7 @@ mod record;
 mod recording;
 mod registry;
 mod replay;
+mod service;
 mod session;
 mod timer;
 mod tls;

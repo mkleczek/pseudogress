@@ -30,6 +30,7 @@ toml = "1.1.8"
 
 [dev-dependencies]
 rcgen = "0.14.10"
+schemars = "1.2.3"
 tokio-postgres = "0.7.18"
 
 # The tests make thousands of SCRAM handshakes on both ends, and unoptimized
