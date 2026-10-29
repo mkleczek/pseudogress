@@ -23,12 +23,13 @@ chooses. One machine can then serve thousands of databases and connections.
 A virtual database is a name that a client connects to.
 
 - **Classes.** A class matches database names with a pattern, where `*`
-  matches any characters; the first class in the configuration wins. It
-  gives its databases a recording, users, latency, faults and
-  `max_connections`. Two classes can't have the same name, nor, in record
-  mode, the same recording.
-- **Existence.** A name that matches no class gets FATAL 3D000, as in
-  PostgreSQL. Nothing is created ahead, so a test can use millions of names.
+  matches any characters; the first class wins: the configuration's in their
+  order, then the ones a class service added. It gives its databases a
+  recording, users, latency, faults and `max_connections`. Two classes can't
+  have the same name, nor, in record mode, the same recording.
+- **Existence.** A name that matches no class, and that the class service
+  doesn't know if there is one, gets FATAL 3D000, as in PostgreSQL. Nothing is
+  created ahead, so a test can use millions of names.
 - **State.** A database has state only while it has connections: the
   connections and the channels they listen on. The registry is sharded by
   the name's hash, so connecting and disconnecting take one shard's lock and
@@ -103,6 +104,9 @@ something, or the results would mislead.
   Pseudogress' own processing time per batch, and how late answers are sent
   after their simulated time, which shows when Pseudogress itself adds to the
   latency being measured.
+  - **Lookups**, with a class service only, are not per class: a counter by
+    result (found, not found, error) and a histogram of their durations. A
+    request counts, not each connection that waits for a shared one.
 
 ## Record and replay
 
@@ -169,6 +173,62 @@ something, or the results would mislead.
   generated JSON of a given size, to vary the size of answers without
   recording one fixture per size.
 
+### Loading classes on demand
+
+A multi-tenant client's database names don't always say which class a database
+belongs to, and a test can have too many tenants to list their classes. With
+`--class-url`, record mode asks an HTTP service for the class of a database
+that no class matches, and adds it. The request, the answer and the JSON
+Schema in `docs/class.schema.json` are in the README.
+
+- **Where the lookup sits.** In connection setup, after the startup message
+  and before authentication, which needs the class's users and password. A
+  database that a class matches never waits for a lookup, so the connections
+  of known classes cost what they did.
+- **Shared lookups.** Connections to one unknown database share one request
+  and its outcome. Matching runs again before a lookup starts and after one
+  ends, because a class loaded meanwhile may cover the name: with a pattern
+  for a group, one request serves the group's connections.
+- **No negative caching.** A 404 or a failure is not remembered, so a database
+  that the service learns of later works, and a failure of the service doesn't
+  stick. The cost is a request for each connection to an unknown name.
+- **The class's checks.** The service's class gets the configuration's checks,
+  and its `databases` must match the database that was asked about. A name
+  that is already loaded is the same class when the service returns an
+  identical definition again, and an error when the definition differs or
+  the configuration has the name.
+- **Append-only registry.** The classes, the rules of `databases` and the
+  targets of record mode are registries with stable indexes, as a connection
+  holds its class as an index. Their capacity is fixed at start, the
+  configuration's classes plus `--max-classes`, so a slot never moves and
+  readers take no lock. Adding takes a mutex, and goes to the connector first,
+  which can refuse a class, then to the classes, and last to the databases,
+  which make it reachable: a class is visible to a connection only once all
+  three have it. Replay fills the registries at start and never adds, so its
+  per-batch lookup costs what it did.
+- **Order of adding.** The service's classes go after the configuration's, in
+  the order they were added, and the first match wins. A service class can't
+  take over a database of the configuration.
+- **Overlapping patterns are the service's error.** Pseudogress doesn't
+  compare the patterns of the classes that a service returns. If two cover one
+  database, the earlier added gets it, and which was added first depends on
+  the order of the connections, so two runs can differ.
+- **The service doesn't choose file paths.** Pseudogress records a class in
+  `DIR/<name>.jsonl`, so a service can't make it write elsewhere. A name has no
+  dot: the times of `a` are in `a.times.jsonl`, which would be the recording
+  of a class named `a.times`.
+- **The cap.** `--max-classes` (256 by default) bounds what a service that
+  returns a class per database can cost: each class holds a recording in
+  memory until shutdown, and a file. Beyond it a lookup fails with 08006.
+- **`classes.toml`, the hand-off to replay.** At shutdown, after the
+  recordings, record mode writes the service's classes as `[[class]]` tables
+  with `recording = "<name>.jsonl"` relative to the directory. They are sorted
+  by name, not in the order of connections, so that the file changes only
+  where the classes did. It is written aside and renamed, like the recordings.
+  Replay mode loads it from `--recordings` and appends the classes to the
+  configuration's with the same checks; a duplicate name is an error. It never
+  calls the service: the file and the recordings are all it needs.
+
 ### What replay doesn't model
 
 - Query plans, lock waits and contention inside the database, beyond the
@@ -184,6 +244,8 @@ something, or the results would mislead.
 ## Admin API
 
 - `GET /metrics`
+- `GET /classes`: the classes in matching order, each with its database
+  pattern and a `"source"` of `"config"` or `"service"`.
 - `GET /databases/{name}`: the open database's connections and listeners.
 - `POST /notify`: `{"channel", "payload"}` and a target.
 - `POST /terminate`: a target.
@@ -217,5 +279,8 @@ in prepared mode (release build, pgbench on the same machine):
   TLS connections are both monomorphized, with no dynamic dispatch.
 - **Modules** with narrow APIs: `session` (the protocol), `replay` and
   `record` (the two kinds of backend behind a trait), `databases`, `auth`,
-  `tls`, `timer`, `metrics` and `admin`. Shared data (configuration,
-  recording format, classes) is in plain modules that the others read.
+  `tls`, `timer`, `metrics`, `admin`, `loader` (loading classes on demand)
+  and `service` (the client of a class service, written by hand on tokio like
+  the admin server, so that it adds no dependency). Shared data
+  (configuration, recording format, classes, the registry) is in plain
+  modules that the others read.

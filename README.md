@@ -15,9 +15,9 @@ latency and faults.
 
 ## Status
 
-Version 0.1.1. It is built to load-test multi-tenant
-PostgREST, and its configuration and recording format may still change
-before 1.0.
+Version 0.1.1; classes from an HTTP service (below) are not in a release yet.
+It is built to load-test multi-tenant PostgREST, and its configuration, the
+service's answers and the recording format may still change before 1.0.
 
 ## Usage
 
@@ -26,6 +26,17 @@ nix-build                                        # or nix-shell --run 'cargo bui
 result/bin/pseudogress record pseudogress.toml   # SIGINT or SIGTERM writes the recordings
 result/bin/pseudogress replay pseudogress.toml
 ```
+
+The command line, in full:
+
+```
+usage: pseudogress replay CONFIG [--recordings DIR]
+       pseudogress record CONFIG [--class-url URL --recordings DIR [--max-classes N]]
+```
+
+Without the flags, which are for [classes from an HTTP
+service](#classes-from-an-http-service), both modes use the configuration's
+classes only. A usage error exits with code 2.
 
 It prints the addresses it listens on to stderr, so a port of 0 in the
 configuration picks a free one.
@@ -153,8 +164,83 @@ stall_for = "2s"
 ```
 
 [docs/DESIGN.md](docs/DESIGN.md) explains what Pseudogress simulates and
-what it doesn't, the recording format, the admin API and measured
-performance.
+what it doesn't, the recording format, how classes load from a service, the
+admin API and measured performance.
+
+## Classes from an HTTP service
+
+A load test of a multi-tenant client can have more tenants than anyone wants
+to list, with database names that don't say which class they belong to. In
+record mode Pseudogress asks an HTTP service for the class of a database that
+no class matches, so the configuration lists only the classes that are fixed.
+
+### Record and replay
+
+```sh
+# Record: the service gives the classes of the databases that no class matches.
+pseudogress record pseudogress.toml \
+  --class-url 'http://classes.internal:8080/classes/{database}?user={user}' \
+  --recordings recordings
+# Replay: from the recordings alone; the service is not called.
+pseudogress replay pseudogress.toml --recordings recordings
+```
+
+- **Where classes are recorded.** A service's class is recorded in
+  `DIR/<name>.jsonl`, with its times file beside it. Pseudogress chooses the
+  path, so the service can't make it write elsewhere.
+- **`classes.toml`.** At shutdown, after the recordings, record mode writes
+  `DIR/classes.toml`: the service's classes as `[[class]]` tables, sorted by
+  name, empty if there are none. Replay mode reads it and serves those
+  classes after the configuration's.
+- **`--recordings DIR`.** Record mode needs it with `--class-url`, and creates
+  the directory at start, so that a bad path fails before any connection.
+  Replay mode needs `DIR/classes.toml` to exist.
+
+### What the service gets and answers
+
+- **The request.** A `GET` of the URL, where `{database}` and, if the URL has
+  it, `{user}` become the percent-encoded database and user of the
+  connection. Only `http://`. The service has 5 seconds to answer.
+- **200.** The body is the class, as JSON.
+- **404.** No such database: the client gets FATAL 3D000, as for any unknown
+  database.
+- **Anything else** is a failure: another status, a network error, a
+  timeout, invalid JSON or an invalid class. The client gets FATAL 08006
+  `class service: <reason>`, and the reason goes to stderr. Nothing is
+  remembered, so the next connection to the database asks again.
+
+The class has the fields of a `[[class]]` table, except `recording`.
+`upstream` is required, `name` is made of letters, digits, `_` and `-` as it
+names files, and `databases` must match the database that was asked about. An
+unknown field, including `recording`, is refused.
+[docs/class.schema.json](docs/class.schema.json) is its JSON Schema, generated
+from the types of the configuration. An example answer:
+
+```json
+{
+  "name": "tenants",
+  "databases": "tenant-*",
+  "users": ["authenticator"],
+  "upstream": { "host": "127.0.0.1", "port": 5433, "user": "postgres", "database": "app" },
+  "max_connections": 60,
+  "settings": { "round_trip": "500us" }
+}
+```
+
+### Limits, and what shows in the admin API
+
+- **`--max-classes N`.** The most classes the service may add, 256 by
+  default; the configuration's don't count. Beyond it a lookup fails with
+  FATAL 08006, whose message says to return classes whose pattern covers a
+  group of databases.
+- **Patterns cover groups of databases.** `tenant-*`, not `tenant-17`: one
+  lookup then serves every database of the group, and the cap holds.
+- **`GET /classes`** lists the classes in matching order, each with its
+  database pattern and a `source` of `config` or `service`.
+- **Metrics**, only with `--class-url`: `pseudogress_class_lookups_total`
+  with a `result` of `found`, `not_found` or `error`, and the histogram
+  `pseudogress_class_lookup_seconds`. A request counts, not each connection
+  that waits for the same one.
 
 ## Licence
 
