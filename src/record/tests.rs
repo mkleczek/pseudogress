@@ -25,9 +25,9 @@ use crate::{
 };
 
 /// A PostgreSQL that is stopped and deleted when dropped.
-struct Cluster {
+pub(crate) struct Cluster {
     dir: PathBuf,
-    port: u16,
+    pub(crate) port: u16,
     /// Only one cluster runs at a time: every PostgreSQL takes a System V
     /// shared memory segment, and macOS allows 32 of them in all, many taken
     /// by other PostgreSQLs on a development machine.
@@ -37,7 +37,7 @@ struct Cluster {
 impl Cluster {
     /// Trusts every user unless `hba` is the content of pg_hba.conf. `None`
     /// when PostgreSQL isn't installed.
-    fn start(hba: Option<&str>) -> Option<Cluster> {
+    pub(crate) fn start(hba: Option<&str>) -> Option<Cluster> {
         if Command::new("initdb")
             .arg("--version")
             .stdout(Stdio::null())

@@ -640,4 +640,270 @@ mod tests {
         let error = toml::from_str::<Settings>("round_trp = \"1ms\"").unwrap_err();
         assert!(error.to_string().contains("round_trp"), "{error}");
     }
+
+    // The file of the classes of a class service.
+
+    /// A directory for one test: tests run in parallel, so they can't share.
+    fn temp_dir(test: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("pseudogress-classes-{}-{test}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn configuration(classes: &str) -> Config {
+        toml::from_str(&format!("listen = []\n{classes}")).unwrap()
+    }
+
+    const APP: &str = "[[class]]\nname = \"app\"\ndatabases = \"app-*\"\nusers = []\n\
+                       recording = \"app.jsonl\"\n";
+
+    /// A class of a class service, recorded in `recording`.
+    fn service_class(name: &str, recording: &Path) -> Class {
+        Class {
+            name: name.into(),
+            databases: format!("{name}-*"),
+            users: vec!["client".into()],
+            password: Some("secret".into()),
+            recording: recording.into(),
+            upstream: Some(Upstream {
+                host: "127.0.0.1".into(),
+                port: 5432,
+                user: "postgres".into(),
+                password: None,
+                database: "{database}".into(),
+            }),
+            ignore_parameters: vec![],
+            max_connections: None,
+            column_override: None,
+            settings: Settings::default(),
+        }
+    }
+
+    fn classes_file(dir: &Path) -> PathBuf {
+        dir.join(CLASSES_FILE)
+    }
+
+    #[test]
+    #[ignore = "xfail: loading classes on demand is not implemented yet"]
+    fn loading_classes_appends_them_after_the_configurations_with_recordings_against_the_directory()
+    {
+        let dir = temp_dir("append");
+        std::fs::write(
+            classes_file(&dir),
+            "[[class]]\nname = \"b\"\ndatabases = \"b-*\"\nusers = [\"client\"]\n\
+             recording = \"b.jsonl\"\n\
+             [[class]]\nname = \"a\"\ndatabases = \"a-*\"\nusers = []\n\
+             recording = \"/elsewhere/a.jsonl\"\n",
+        )
+        .unwrap();
+        let mut config = configuration(APP);
+
+        load_classes(&mut config, &dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        let loaded: Vec<_> = config
+            .classes
+            .iter()
+            .map(|class| (class.name.as_str(), class.recording.clone()))
+            .collect();
+        assert_eq!(
+            loaded,
+            [
+                ("app", PathBuf::from("app.jsonl")),
+                ("b", dir.join("b.jsonl")),
+                ("a", PathBuf::from("/elsewhere/a.jsonl")),
+            ]
+        );
+    }
+
+    #[test]
+    #[ignore = "xfail: loading classes on demand is not implemented yet"]
+    fn a_classes_file_without_classes_adds_none() {
+        let dir = temp_dir("none");
+        let mut config = configuration(APP);
+        for text in ["", "class = []\n"] {
+            std::fs::write(classes_file(&dir), text).unwrap();
+            load_classes(&mut config, &dir).unwrap();
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(config.classes.len(), 1);
+    }
+
+    #[test]
+    #[ignore = "xfail: loading classes on demand is not implemented yet"]
+    fn loading_classes_needs_the_file() {
+        let dir = temp_dir("missing");
+        let mut config = configuration(APP);
+        let error = load_classes(&mut config, &dir).unwrap_err();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(error.contains("classes.toml"), "{error}");
+        assert_eq!(config.classes.len(), 1);
+    }
+
+    #[test]
+    #[ignore = "xfail: loading classes on demand is not implemented yet"]
+    fn loading_classes_refuses_what_the_configuration_refuses_naming_the_file_and_the_class() {
+        let dir = temp_dir("refused");
+        let tenants = |fields: &str| {
+            format!("[[class]]\nname = \"tenants\"\ndatabases = \"t-*\"\nusers = []\n{fields}")
+        };
+        let recorded = tenants("recording = \"t.jsonl\"\n");
+        for (configuration_text, file, reasons) in [
+            // The name of a class of the configuration.
+            (
+                recorded.clone(),
+                recorded.clone(),
+                vec!["class tenants", "name"],
+            ),
+            // The name of an earlier class of the file.
+            (
+                APP.to_owned(),
+                recorded.clone() + &recorded,
+                vec!["class tenants", "name"],
+            ),
+            (
+                APP.to_owned(),
+                tenants(""),
+                vec!["class tenants", "recording"],
+            ),
+            (
+                APP.to_owned(),
+                tenants("recording = \"t.jsonl\"\n[class.settings]\nexecution_scale = -1.0\n"),
+                vec!["class tenants", "execution_scale"],
+            ),
+            (
+                APP.to_owned(),
+                tenants("recording = \"t.jsonl\"\nignore_parameters = [\"\"]\n"),
+                vec!["class tenants", "ignore_parameters"],
+            ),
+            (
+                APP.to_owned(),
+                tenants("recording = \"t.jsonl\"\nfrobnicate = 1\n"),
+                vec!["frobnicate"],
+            ),
+            (APP.to_owned(), "listen = []\n".to_owned(), vec!["listen"]),
+            (APP.to_owned(), "[[class\n".to_owned(), vec![]),
+        ] {
+            std::fs::write(classes_file(&dir), &file).unwrap();
+            let mut config = configuration(&configuration_text);
+            let error = load_classes(&mut config, &dir).unwrap_err();
+            assert!(error.contains("classes.toml"), "{file}: {error}");
+            for reason in reasons {
+                assert!(error.contains(reason), "{file}: {error}");
+            }
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// What `classes.toml` is made of, as the tests read it.
+    #[derive(Deserialize)]
+    struct File {
+        #[serde(rename = "class")]
+        classes: Vec<Class>,
+    }
+
+    fn read_file(dir: &Path) -> File {
+        let text = std::fs::read_to_string(classes_file(dir)).unwrap();
+        toml::from_str(&text).unwrap_or_else(|e| panic!("{e}: {text}"))
+    }
+
+    #[test]
+    #[ignore = "xfail: loading classes on demand is not implemented yet"]
+    fn writing_classes_sorts_them_by_name_and_makes_the_recordings_relative() {
+        let dir = temp_dir("write");
+        let classes = [
+            service_class("zeta", &dir.join("zeta.jsonl")),
+            service_class("alpha", &dir.join("alpha.jsonl")),
+            service_class("Mid-1", &dir.join("Mid-1.jsonl")),
+        ];
+
+        write_classes(&dir, &classes).unwrap();
+
+        let file = read_file(&dir);
+        let written: Vec<_> = file
+            .classes
+            .iter()
+            .map(|class| (class.name.as_str(), class.recording.to_str().unwrap()))
+            .collect();
+        assert_eq!(
+            written,
+            [
+                ("Mid-1", "Mid-1.jsonl"),
+                ("alpha", "alpha.jsonl"),
+                ("zeta", "zeta.jsonl")
+            ]
+        );
+        // The rest of a class is as it was.
+        for class in &file.classes {
+            assert_eq!(class, &service_class(&class.name, &class.recording));
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    #[ignore = "xfail: loading classes on demand is not implemented yet"]
+    fn written_classes_are_loaded_with_their_recordings_in_the_directory() {
+        let dir = temp_dir("roundtrip");
+        let classes = [
+            service_class("b", &dir.join("b.jsonl")),
+            service_class("a", &dir.join("a.jsonl")),
+        ];
+        write_classes(&dir, &classes).unwrap();
+        let mut config = configuration(APP);
+
+        load_classes(&mut config, &dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(config.classes.len(), 3);
+        assert_eq!(config.classes[1], classes[1]);
+        assert_eq!(config.classes[2], classes[0]);
+    }
+
+    #[test]
+    #[ignore = "xfail: loading classes on demand is not implemented yet"]
+    fn writing_no_classes_makes_an_empty_valid_file() {
+        let dir = temp_dir("empty");
+        write_classes(&dir, &[]).unwrap();
+        let mut config = configuration(APP);
+
+        load_classes(&mut config, &dir).unwrap();
+        let written = read_file(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert!(written.classes.is_empty());
+        assert_eq!(config.classes.len(), 1);
+    }
+
+    #[test]
+    #[ignore = "xfail: loading classes on demand is not implemented yet"]
+    fn writing_classes_replaces_the_file_and_leaves_nothing_beside_it() {
+        let dir = temp_dir("replace");
+        write_classes(&dir, &[service_class("old", &dir.join("old.jsonl"))]).unwrap();
+        write_classes(&dir, &[service_class("new", &dir.join("new.jsonl"))]).unwrap();
+
+        let file = read_file(&dir);
+        let mut names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(file.classes.len(), 1);
+        assert_eq!(file.classes[0].name, "new");
+        assert_eq!(names, ["classes.toml"]);
+    }
+
+    #[test]
+    #[ignore = "xfail: loading classes on demand is not implemented yet"]
+    fn writing_classes_to_a_directory_that_is_not_one_is_an_error() {
+        let dir = temp_dir("notadir");
+        let file = dir.join("file");
+        std::fs::write(&file, "").unwrap();
+        let error = write_classes(&file, &[]).unwrap_err();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(error.contains("file"), "{error}");
+    }
 }

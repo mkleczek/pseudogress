@@ -38,7 +38,7 @@ use sink::Sink;
 mod conn;
 mod sink;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub struct Record {
     /// By class index, like the classes.

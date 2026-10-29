@@ -21,6 +21,9 @@ use crate::{
     session::{Connector, Shared},
 };
 
+#[cfg(test)]
+mod tests;
+
 /// Why no class was loaded for a database.
 #[allow(dead_code, reason = "nothing loads classes on demand yet")]
 #[derive(Debug, Clone, PartialEq)]
