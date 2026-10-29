@@ -325,7 +325,6 @@ fn closed_port() -> u16 {
 // Lookups.
 
 #[tokio::test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 async fn an_unknown_database_is_looked_up_and_its_class_added() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -347,7 +346,6 @@ async fn an_unknown_database_is_looked_up_and_its_class_added() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 async fn the_recording_of_a_class_of_the_service_is_in_the_recordings_directory() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -392,7 +390,6 @@ fn read_classes_file(server: &Server) -> File {
 }
 
 #[tokio::test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 async fn classes_toml_is_written_at_shutdown_sorted_by_name_with_relative_recordings() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -438,7 +435,6 @@ async fn classes_toml_is_written_at_shutdown_sorted_by_name_with_relative_record
 }
 
 #[tokio::test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 async fn without_classes_from_the_service_classes_toml_is_empty_but_valid() {
     let stub = Stub::start(Duration::ZERO).await;
     let server = start(&stub, closed_port(), &[("app", "app-*")], 4).await;
@@ -449,7 +445,6 @@ async fn without_classes_from_the_service_classes_toml_is_empty_but_valid() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 async fn a_class_of_the_configuration_wins_over_the_service() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -478,7 +473,6 @@ async fn a_class_of_the_configuration_wins_over_the_service() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 async fn a_database_that_a_loaded_class_matches_is_not_looked_up() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -499,7 +493,6 @@ async fn a_database_that_a_loaded_class_matches_is_not_looked_up() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 async fn a_database_that_a_class_matches_by_the_time_of_the_lookup_is_not_asked_about() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -522,7 +515,6 @@ async fn a_database_that_a_class_matches_by_the_time_of_the_lookup_is_not_asked_
 }
 
 #[tokio::test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 async fn loading_says_why_no_class_was_found() {
     let stub = Stub::start(Duration::ZERO).await;
     stub.say(
@@ -544,7 +536,6 @@ async fn loading_says_why_no_class_was_found() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 async fn concurrent_connects_to_one_unknown_database_make_one_request() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -574,7 +565,6 @@ async fn concurrent_connects_to_one_unknown_database_make_one_request() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 async fn concurrent_connects_to_a_database_that_does_not_exist_make_one_request() {
     let stub = Stub::start(Duration::from_millis(500)).await;
     let server = start(&stub, closed_port(), &[], 4).await;
@@ -594,7 +584,6 @@ async fn concurrent_connects_to_a_database_that_does_not_exist_make_one_request(
 }
 
 #[tokio::test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 async fn two_databases_that_get_the_same_class_make_one_class() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -621,7 +610,6 @@ async fn two_databases_that_get_the_same_class_make_one_class() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 async fn a_class_that_differs_from_the_one_returned_before_fails_the_connection() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -651,7 +639,6 @@ async fn a_class_that_differs_from_the_one_returned_before_fails_the_connection(
 }
 
 #[tokio::test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 async fn a_name_of_the_configuration_fails_the_connection() {
     let stub = Stub::start(Duration::ZERO).await;
     stub.say(
@@ -672,7 +659,6 @@ async fn a_name_of_the_configuration_fails_the_connection() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 async fn a_database_that_the_service_does_not_know_does_not_exist() {
     let stub = Stub::start(Duration::ZERO).await;
     let server = start(&stub, closed_port(), &[], 4).await;
@@ -685,7 +671,6 @@ async fn a_database_that_the_service_does_not_know_does_not_exist() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 async fn a_database_that_was_not_found_is_looked_up_again() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -704,7 +689,6 @@ async fn a_database_that_was_not_found_is_looked_up_again() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 async fn a_failing_service_fails_the_connection_with_the_reason() {
     let stub = Stub::start(Duration::ZERO).await;
     stub.say(
@@ -729,7 +713,6 @@ async fn a_failing_service_fails_the_connection_with_the_reason() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 async fn an_invalid_class_fails_the_connection() {
     let stub = Stub::start(Duration::ZERO).await;
     // Its databases don't include the one that was asked about.
@@ -748,7 +731,6 @@ async fn an_invalid_class_fails_the_connection() {
 }
 
 #[tokio::test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 async fn a_service_that_would_add_more_classes_than_the_most_fails_the_connection() {
     let Some(cluster) = Cluster::start(None) else {
         return;
@@ -780,7 +762,6 @@ async fn a_service_that_would_add_more_classes_than_the_most_fails_the_connectio
 }
 
 #[tokio::test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 async fn the_most_classes_do_not_limit_the_classes_of_the_configuration() {
     let stub = Stub::start(Duration::ZERO).await;
     let classes = [("a", "a-*"), ("b", "b-*"), ("c", "c-*")];
@@ -800,7 +781,6 @@ fn service(dir: &Path) -> options::Service {
 }
 
 #[test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 fn the_directory_of_recordings_is_created_at_startup() {
     let dir = temp_dir().join("nested").join("recordings");
 
@@ -811,7 +791,6 @@ fn the_directory_of_recordings_is_created_at_startup() {
 }
 
 #[test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 fn a_directory_of_recordings_that_cannot_be_created_fails_at_startup() {
     let dir = temp_dir();
     fs::create_dir_all(&dir).unwrap();
@@ -829,7 +808,6 @@ fn a_directory_of_recordings_that_cannot_be_created_fails_at_startup() {
 // Replay.
 
 #[tokio::test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 async fn replay_answers_a_database_of_a_service_class_from_its_recording() {
     let Some(cluster) = Cluster::start(None) else {
         return;

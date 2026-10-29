@@ -108,7 +108,7 @@ jobs:
           output=$("$bin" 2>&1) || status=$?
           echo "exit code $status: $output"
           test "$status" -eq 2
-          test "$output" = "usage: pseudogress replay|record CONFIG"
+          test "$output" = $'usage: pseudogress replay CONFIG [--recordings DIR]\n       pseudogress record CONFIG [--class-url URL --recordings DIR [--max-classes N]]'
       - name: Archive
         run: |
           mkdir "$NAME" dist
@@ -129,7 +129,7 @@ jobs:
           output=$("$dir/$NAME/pseudogress" 2>&1) || status=$?
           echo "exit code $status: $output"
           test "$status" -eq 2
-          test "$output" = "usage: pseudogress replay|record CONFIG"
+          test "$output" = $'usage: pseudogress replay CONFIG [--recordings DIR]\n       pseudogress record CONFIG [--class-url URL --recordings DIR [--max-classes N]]'
       - uses: actions/upload-artifact@v7
         with:
           name: pseudogress-linux-${{ matrix.arch }}
@@ -184,7 +184,7 @@ jobs:
           output=$("$bin" 2>&1) || status=$?
           echo "exit code $status: $output"
           test "$status" -eq 2
-          test "$output" = "usage: pseudogress replay|record CONFIG"
+          test "$output" = $'usage: pseudogress replay CONFIG [--recordings DIR]\n       pseudogress record CONFIG [--class-url URL --recordings DIR [--max-classes N]]'
       - name: Archive
         run: |
           mkdir dist
@@ -207,7 +207,7 @@ jobs:
           output=$("$dir/$NAME/pseudogress" 2>&1) || status=$?
           echo "exit code $status: $output"
           test "$status" -eq 2
-          test "$output" = "usage: pseudogress replay|record CONFIG"
+          test "$output" = $'usage: pseudogress replay CONFIG [--recordings DIR]\n       pseudogress record CONFIG [--class-url URL --recordings DIR [--max-classes N]]'
       - uses: actions/upload-artifact@v7
         with:
           name: pseudogress-macos-universal

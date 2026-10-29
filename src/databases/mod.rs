@@ -160,6 +160,8 @@ pub struct DatabaseInfo {
 }
 
 impl Databases {
+    /// Without room for classes to be added: how the tests make them.
+    #[cfg(test)]
     pub fn new(classes: &[config::Class]) -> Self {
         Self::with_room(classes, 0)
     }
@@ -185,6 +187,13 @@ impl Databases {
     /// index: `connect` may pick it as soon as this returns.
     pub fn add(&self, class: &config::Class) -> Option<usize> {
         self.classes.push(Rule::new(class))
+    }
+
+    /// Whether a class matches the database.
+    pub fn matches(&self, database: &str) -> bool {
+        self.classes
+            .iter()
+            .any(|rule| rule.pattern.matches(database))
     }
 
     pub fn connect(&self, database: &str) -> Result<Connection, ConnectError> {

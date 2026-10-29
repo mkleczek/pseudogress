@@ -43,7 +43,6 @@ impl Url {
 impl Template {
     /// Checks a template at startup, so that a mistake fails before any
     /// connection does.
-    #[allow(dead_code, reason = "nothing looks classes up yet")]
     pub fn parse(template: &str) -> Result<Template, String> {
         let rest = match template.split_at_checked("http://".len()) {
             Some((scheme, rest)) if scheme.eq_ignore_ascii_case("http://") => rest,

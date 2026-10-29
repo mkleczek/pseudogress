@@ -34,6 +34,7 @@ use crate::{
     auth::{self, AuthError, Scram, Verifier},
     class::Class,
     databases::ConnectError,
+    loader::LoadError,
     metrics::ClassMetrics,
     timer,
     tls::Tls,
@@ -182,7 +183,18 @@ async fn start<C: Connector, S: Stream>(
     }
     peer.ctx.protocol_version = ProtocolVersion::PROTOCOL3_0;
 
-    let connection = match shared.databases.connect(database) {
+    let mut connected = shared.databases.connect(database);
+    if let (Err(ConnectError::NoSuchDatabase), Some(loader)) = (&connected, &shared.loader) {
+        match loader.load(shared, database, user).await {
+            Ok(()) => connected = shared.databases.connect(database),
+            Err(LoadError::NotFound) => {}
+            Err(LoadError::Failed(reason)) => {
+                let message = format!("class service: {reason}");
+                return peer.fatal(&mut out, "08006", &message).await;
+            }
+        }
+    }
+    let connection = match connected {
         Ok(connection) => connection,
         Err(ConnectError::NoSuchDatabase) => {
             let message = format!("database \"{database}\" does not exist");

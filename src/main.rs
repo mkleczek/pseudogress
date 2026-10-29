@@ -21,7 +21,7 @@ mod timer;
 mod tls;
 mod wire;
 
-use std::{path::Path, process::ExitCode, sync::Arc};
+use std::{process::ExitCode, sync::Arc};
 
 use tokio::net::TcpListener;
 
@@ -30,28 +30,31 @@ use crate::{
     class::{Class, Classes},
     config::Config,
     databases::Databases,
+    loader::Loader,
+    options::Mode,
     record::Record,
     replay::Replay,
     session::Shared,
     tls::Tls,
 };
 
-const USAGE: &str = "usage: pseudogress replay|record CONFIG";
-
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
-    let [_, mode, path] = args.as_slice() else {
-        eprintln!("{USAGE}");
-        return ExitCode::from(2);
+    let options = match options::parse(&args) {
+        Ok(options) => options,
+        Err(usage) => {
+            eprintln!("{usage}");
+            return ExitCode::from(2);
+        }
     };
-    let result = config::load(Path::new(path)).and_then(|config| {
+    let result = config::load(&options.config).and_then(|config| {
         // Every connection is a file descriptor.
         let _ = rlimit::increase_nofile_limit(u64::MAX);
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .map_err(|e| e.to_string())?
-            .block_on(run(mode, config))
+            .block_on(run(options.mode, config))
     });
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -62,9 +65,23 @@ fn main() -> ExitCode {
     }
 }
 
-async fn run(mode: &str, config: Config) -> Result<(), String> {
-    let classes: Classes = Arc::new(config.classes.iter().map(Class::new).collect());
-    let databases = Arc::new(Databases::new(&config.classes));
+async fn run(mode: Mode, mut config: Config) -> Result<(), String> {
+    // Replay knows its classes at startup; the class service of record mode
+    // adds to the classes it starts with.
+    let room = match &mode {
+        Mode::Record {
+            service: Some(service),
+        } => service.max_classes,
+        _ => 0,
+    };
+    if let Mode::Replay {
+        recordings: Some(recordings),
+    } = &mode
+    {
+        config::load_classes(&mut config, recordings)?;
+    }
+    let classes = Class::registry(&config.classes, room);
+    let databases = Arc::new(Databases::with_room(&config.classes, room));
     if let Some(address) = config.admin {
         let listener = TcpListener::bind(address)
             .await
@@ -79,15 +96,17 @@ async fn run(mode: &str, config: Config) -> Result<(), String> {
     }
     let tls = config.tls.as_ref().map(Tls::load).transpose()?;
     match mode {
-        "replay" => {
+        Mode::Replay { .. } => {
             let replay = Replay::load(&config, classes.clone())?;
-            let shared = share(&config, classes, databases, tls, replay);
+            let shared = share(&config, classes, databases, tls, replay, None);
             session::serve(listen(&config)?, shared)
                 .await
                 .map_err(|e| e.to_string())
         }
-        "record" => {
-            let shared = share(&config, classes, databases, tls, Record::new(&config)?);
+        Mode::Record { service } => {
+            let loader = service.map(Loader::new).transpose()?;
+            let record = Record::with_room(&config, room)?;
+            let shared = share(&config, classes, databases, tls, record, loader);
             let listeners = listen(&config)?;
             tokio::select! {
                 served = session::serve(listeners, shared.clone()) => {
@@ -95,9 +114,9 @@ async fn run(mode: &str, config: Config) -> Result<(), String> {
                 }
                 () = shutdown() => {}
             }
-            shared.connector.write()
+            shared.connector.write()?;
+            shared.loader.as_ref().map_or(Ok(()), Loader::write)
         }
-        _ => Err(USAGE.to_owned()),
     }
 }
 
@@ -129,6 +148,7 @@ fn share<C>(
     databases: Arc<Databases>,
     tls: Option<Tls>,
     connector: C,
+    loader: Option<Loader>,
 ) -> Arc<Shared<C>> {
     Arc::new(Shared {
         classes,
@@ -137,7 +157,7 @@ fn share<C>(
         secret: config.secret.clone(),
         tls,
         connector,
-        loader: None,
+        loader,
     })
 }
 

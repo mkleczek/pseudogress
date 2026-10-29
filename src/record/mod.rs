@@ -56,7 +56,9 @@ struct Target {
 }
 
 impl Record {
-    /// Every class needs an upstream.
+    /// Every class needs an upstream. Without room for classes to be added:
+    /// how the tests make it.
+    #[cfg(test)]
     pub fn new(config: &Config) -> Result<Self, String> {
         Self::with_room(config, 0)
     }
@@ -145,6 +147,10 @@ impl Target {
 
 impl Connector for Record {
     type Backend = Recorder;
+
+    fn add_class(&self, class: &config::Class) -> Result<usize, String> {
+        self.add(class)
+    }
 
     async fn connect(&self, class: usize, database: &str, _user: &str) -> Result<Recorder, String> {
         let target = self.classes[class].clone();

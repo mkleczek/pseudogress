@@ -18,7 +18,6 @@ mod tests;
 pub use template::{Template, Url};
 
 /// How long a lookup may take, from connecting to the last byte of the answer.
-#[allow(dead_code, reason = "nothing looks classes up yet")]
 pub const TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The names of classes: they name the files of recordings. A dot is not
@@ -42,7 +41,6 @@ pub enum Lookup {
 }
 
 /// Asks the service for the class of `database`, to which `user` connects.
-#[allow(dead_code, reason = "nothing looks classes up yet")]
 pub async fn lookup(template: &Template, database: &str, user: &str, timeout: Duration) -> Lookup {
     match http::get(&template.fill(database, user), timeout).await {
         Ok(Some(body)) => match parse_class(&body, database) {

@@ -20,7 +20,9 @@ use pgwire::messages::PgWireFrontendMessage;
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::{net::TcpListener, task::JoinSet};
 
-use crate::{auth::Verifiers, class::Classes, databases::Databases, loader::Loader, tls::Tls};
+use crate::{
+    auth::Verifiers, class::Classes, config, databases::Databases, loader::Loader, tls::Tls,
+};
 
 mod batches;
 mod cancel;
@@ -70,6 +72,13 @@ pub trait Connector: Send + Sync + 'static {
         database: &str,
         user: &str,
     ) -> impl Future<Output = Result<Self::Backend, String>> + Send;
+
+    /// Makes ready for the connections to a class that is added while running,
+    /// and returns its index. Only record mode adds classes.
+    fn add_class(&self, class: &config::Class) -> Result<usize, String> {
+        let _ = class;
+        Err("this mode does not add classes".to_owned())
+    }
 }
 
 /// What every connection shares.
@@ -82,7 +91,6 @@ pub struct Shared<C> {
     pub connector: C,
     /// Record mode with a class service: finds the class of a database that
     /// no class matches.
-    #[allow(dead_code, reason = "nothing loads classes on demand yet")]
     pub loader: Option<Loader>,
 }
 

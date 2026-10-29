@@ -8,16 +8,18 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
+    fs,
     path::PathBuf,
-    sync::Mutex,
+    sync::{Mutex, MutexGuard, PoisonError},
 };
 
 use tokio::sync::watch;
 
 use crate::{
+    class::Class,
     config,
     options::Service,
-    service::Template,
+    service::{self, Lookup, Template},
     session::{Connector, Shared},
 };
 
@@ -25,7 +27,6 @@ use crate::{
 mod tests;
 
 /// Why no class was loaded for a database.
-#[allow(dead_code, reason = "nothing loads classes on demand yet")]
 #[derive(Debug, Clone, PartialEq)]
 pub enum LoadError {
     /// The service has no class for the database: FATAL 3D000.
@@ -35,7 +36,6 @@ pub enum LoadError {
     Failed(String),
 }
 
-#[allow(dead_code, reason = "nothing loads classes on demand yet")]
 pub struct Loader {
     template: Template,
     /// Where the classes are recorded, and `classes.toml` goes.
@@ -44,7 +44,6 @@ pub struct Loader {
     state: Mutex<State>,
 }
 
-#[allow(dead_code, reason = "nothing loads classes on demand yet")]
 struct State {
     /// The classes that the service returned, by name.
     added: BTreeMap<String, config::Class>,
@@ -53,13 +52,21 @@ struct State {
     lookups: HashMap<String, watch::Sender<Option<Result<(), LoadError>>>>,
 }
 
-#[allow(dead_code, reason = "nothing loads classes on demand yet")]
 impl Loader {
     /// Creates the directory of the recordings, so that a path that can't be
     /// written fails before any connection does.
     pub fn new(service: Service) -> Result<Loader, String> {
-        let _ = service;
-        todo!()
+        fs::create_dir_all(&service.recordings)
+            .map_err(|e| format!("{}: {e}", service.recordings.display()))?;
+        Ok(Loader {
+            template: service.url,
+            recordings: service.recordings,
+            max_classes: service.max_classes,
+            state: Mutex::new(State {
+                added: BTreeMap::new(),
+                lookups: HashMap::new(),
+            }),
+        })
     }
 
     /// Makes a class match `database`, if the service has one. When it is
@@ -73,13 +80,132 @@ impl Loader {
         database: &str,
         user: &str,
     ) -> Result<(), LoadError> {
-        let _ = (shared, database, user);
-        todo!()
+        loop {
+            let mut waiting = {
+                let mut state = self.lock();
+                if shared.databases.matches(database) {
+                    return Ok(());
+                }
+                match state.lookups.get(database) {
+                    Some(lookup) => lookup.subscribe(),
+                    None => {
+                        let (lookup, _) = watch::channel(None);
+                        state.lookups.insert(database.to_owned(), lookup);
+                        break;
+                    }
+                }
+            };
+            // Without an outcome the lookup was cancelled: match again, and
+            // ask if nobody does.
+            if let Ok(outcome) = waiting
+                .wait_for(Option::is_some)
+                .await
+                .map(|outcome| outcome.clone())
+            {
+                return outcome.expect("the outcome is there");
+            }
+        }
+        let mut lookup = InFlight {
+            loader: self,
+            database,
+            outcome: None,
+        };
+        let outcome = self.find(shared, database, user).await;
+        if let Err(LoadError::Failed(reason)) = &outcome {
+            eprintln!("pseudogress: class service: {database}: {reason}");
+        }
+        lookup.outcome = Some(outcome.clone());
+        outcome
     }
 
     /// Writes `classes.toml` into the directory of the recordings: the classes
     /// that were added. Called once, at shutdown, after the recordings.
     pub fn write(&self) -> Result<(), String> {
-        todo!()
+        config::write_classes(&self.recordings, self.lock().added.values())
+    }
+
+    async fn find<C: Connector>(
+        &self,
+        shared: &Shared<C>,
+        database: &str,
+        user: &str,
+    ) -> Result<(), LoadError> {
+        match service::lookup(&self.template, database, user, service::TIMEOUT).await {
+            Lookup::Found(class) => self.add(shared, *class).map_err(LoadError::Failed),
+            Lookup::NotFound => Err(LoadError::NotFound),
+            Lookup::Failed(reason) => Err(LoadError::Failed(reason)),
+        }
+    }
+
+    /// Adds the class that the service returned, unless it is one that was
+    /// added before.
+    fn add<C: Connector>(
+        &self,
+        shared: &Shared<C>,
+        mut class: config::Class,
+    ) -> Result<(), String> {
+        class.recording = self.recordings.join(format!("{}.jsonl", class.name));
+        let mut state = self.lock();
+        if let Some(added) = state.added.get(&class.name) {
+            return if *added == class {
+                Ok(())
+            } else {
+                Err(format!(
+                    "class {}: the service returned a different definition before",
+                    class.name
+                ))
+            };
+        }
+        if shared.classes.iter().any(|other| other.name == class.name) {
+            return Err(format!(
+                "class {}: a class of the configuration has that name",
+                class.name
+            ));
+        }
+        if state.added.len() >= self.max_classes {
+            return Err(format!(
+                "{} classes were added, as many as --max-classes allows: the service \
+                 should return classes whose pattern covers a group of databases",
+                self.max_classes
+            ));
+        }
+        // The connector first, as it can refuse the class. The databases go
+        // last, as they make the class reachable.
+        let index = shared.connector.add_class(&class)?;
+        assert_eq!(
+            shared.classes.push(Class::new(&class)),
+            Some(index),
+            "the classes are at the indexes of the connector's"
+        );
+        assert_eq!(
+            shared.databases.add(&class),
+            Some(index),
+            "the databases are at the indexes of the classes"
+        );
+        state.added.insert(class.name.clone(), class);
+        Ok(())
+    }
+
+    fn lock(&self) -> MutexGuard<'_, State> {
+        // Nothing the guard protects is left half done by a panic.
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// A lookup that this caller makes. When it is dropped, the callers that wait
+/// for it go on: with its outcome, or, when it was cancelled, to match again.
+struct InFlight<'a> {
+    loader: &'a Loader,
+    database: &'a str,
+    outcome: Option<Result<(), LoadError>>,
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        if let Some(lookup) = self.loader.lock().lookups.remove(self.database)
+            && let Some(outcome) = self.outcome.take()
+        {
+            lookup.send_replace(Some(outcome));
+        }
     }
 }

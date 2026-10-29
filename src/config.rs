@@ -10,6 +10,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+use crate::recording;
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -38,7 +40,7 @@ pub struct Tls {
 
 /// A class of virtual databases: a `[[class]]` table of the configuration, or
 /// the answer of a class service, which leaves out `recording`.
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[cfg_attr(test, schemars(title = "Pseudogress class"))]
 #[serde(deny_unknown_fields)]
@@ -97,7 +99,7 @@ impl Class {
     }
 }
 
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct Upstream {
@@ -112,7 +114,7 @@ pub struct Upstream {
     pub database: String,
 }
 
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ColumnOverride {
@@ -245,36 +247,75 @@ pub struct Faults {
 /// The file of the classes that record mode took from a class service, in the
 /// directory of the recordings: `[[class]]` tables like the configuration's,
 /// with their recordings relative to the directory.
-#[allow(dead_code, reason = "nothing loads classes on demand yet")]
 pub const CLASSES_FILE: &str = "classes.toml";
+
+/// What `classes.toml` is made of.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ClassesFile {
+    #[serde(default, rename = "class")]
+    classes: Vec<Class>,
+}
 
 /// Appends the classes of `dir/classes.toml` to the configuration's, for
 /// replay mode, with the recordings resolved against `dir`. The classes get
 /// the checks of the configuration's: a name that an earlier class has is
 /// an error. The file must exist.
-#[allow(dead_code, reason = "nothing loads classes on demand yet")]
 pub fn load_classes(config: &mut Config, dir: &Path) -> Result<(), String> {
-    let _ = (config, dir);
-    todo!()
+    let path = dir.join(CLASSES_FILE);
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut file: ClassesFile =
+        toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut names = config
+        .classes
+        .iter()
+        .map(|class| class.name.as_str())
+        .collect();
+    check(&file.classes, &mut names, &path)?;
+    for class in &mut file.classes {
+        class.recording = dir.join(&class.recording);
+    }
+    config.classes.append(&mut file.classes);
+    Ok(())
 }
 
 /// Writes `dir/classes.toml`, for replay mode: the classes sorted by name,
 /// with their recordings relative to `dir`. The file is written aside and
 /// renamed, as the recordings are. Without classes it is an empty, valid file.
-#[allow(dead_code, reason = "nothing loads classes on demand yet")]
 pub fn write_classes<'a>(
     dir: &Path,
     classes: impl IntoIterator<Item = &'a Class>,
 ) -> Result<(), String> {
-    let _ = (dir, classes);
-    todo!()
+    let mut classes: Vec<Class> = classes.into_iter().cloned().collect();
+    classes.sort_by(|a, b| a.name.cmp(&b.name));
+    for class in &mut classes {
+        if let Ok(relative) = class.recording.strip_prefix(dir) {
+            class.recording = relative.to_owned();
+        }
+    }
+    let path = dir.join(CLASSES_FILE);
+    let text = toml::to_string(&ClassesFile { classes })
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    let partial = recording::write_partial(&path, &lines)?;
+    recording::rename(&partial, &path)
 }
 
 pub fn load(path: &Path) -> Result<Config, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let config: Config = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut names = HashSet::new();
-    for class in &config.classes {
+    check(&config.classes, &mut HashSet::new(), path)?;
+    Ok(config)
+}
+
+/// Checks the classes that `path` has, in order, after the classes whose
+/// names are `names`, to which theirs are added.
+fn check<'a>(
+    classes: &'a [Class],
+    names: &mut HashSet<&'a str>,
+    path: &Path,
+) -> Result<(), String> {
+    for class in classes {
         let context = |e| format!("{}: class {}: {e}", path.display(), class.name);
         if !names.insert(&class.name) {
             return Err(context("name: an earlier class has it".into()));
@@ -285,7 +326,7 @@ pub fn load(path: &Path) -> Result<Config, String> {
         }
         class.validate().map_err(context)?;
     }
-    Ok(config)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -686,7 +727,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn loading_classes_appends_them_after_the_configurations_with_recordings_against_the_directory()
     {
         let dir = temp_dir("append");
@@ -719,7 +759,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn a_classes_file_without_classes_adds_none() {
         let dir = temp_dir("none");
         let mut config = configuration(APP);
@@ -732,7 +771,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn loading_classes_needs_the_file() {
         let dir = temp_dir("missing");
         let mut config = configuration(APP);
@@ -743,7 +781,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn loading_classes_refuses_what_the_configuration_refuses_naming_the_file_and_the_class() {
         let dir = temp_dir("refused");
         let tenants = |fields: &str| {
@@ -810,7 +847,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn writing_classes_sorts_them_by_name_and_makes_the_recordings_relative() {
         let dir = temp_dir("write");
         let classes = [
@@ -843,7 +879,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn written_classes_are_loaded_with_their_recordings_in_the_directory() {
         let dir = temp_dir("roundtrip");
         let classes = [
@@ -862,7 +897,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn writing_no_classes_makes_an_empty_valid_file() {
         let dir = temp_dir("empty");
         write_classes(&dir, &[]).unwrap();
@@ -877,7 +911,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn writing_classes_replaces_the_file_and_leaves_nothing_beside_it() {
         let dir = temp_dir("replace");
         write_classes(&dir, &[service_class("old", &dir.join("old.jsonl"))]).unwrap();
@@ -897,7 +930,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn writing_classes_to_a_directory_that_is_not_one_is_an_error() {
         let dir = temp_dir("notadir");
         let file = dir.join("file");

@@ -5,26 +5,22 @@ use std::path::PathBuf;
 
 use crate::service::Template;
 
-#[allow(dead_code, reason = "nothing loads classes on demand yet")]
 pub const USAGE: &str = concat!(
     "usage: pseudogress replay CONFIG [--recordings DIR]\n",
     "       pseudogress record CONFIG [--class-url URL --recordings DIR [--max-classes N]]"
 );
 
 /// How many classes a class service may add, unless `--max-classes` says.
-#[allow(dead_code, reason = "nothing loads classes on demand yet")]
 pub const DEFAULT_MAX_CLASSES: usize = 256;
 
-#[allow(dead_code, reason = "nothing loads classes on demand yet")]
 #[derive(Debug)]
 pub struct Options {
     pub config: PathBuf,
     pub mode: Mode,
 }
 
-/// What the flags that a mode takes say about it, and nothing else: a flag
-/// that doesn't go with the mode is a usage error.
-#[allow(dead_code, reason = "nothing loads classes on demand yet")]
+/// A mode, with what its flags say. A flag that doesn't go with the mode is a
+/// usage error, so a mode has only its own.
 #[derive(Debug)]
 pub enum Mode {
     /// With `--recordings DIR`, it also serves the classes of
@@ -36,7 +32,6 @@ pub enum Mode {
 }
 
 /// A class service, and where its classes are recorded.
-#[allow(dead_code, reason = "nothing loads classes on demand yet")]
 #[derive(Debug)]
 pub struct Service {
     pub url: Template,
@@ -48,10 +43,82 @@ pub struct Service {
 
 /// Parses the arguments of the process, the program's name first. The error is
 /// what to print: the reason, if there is one, and the usage.
-#[allow(dead_code, reason = "nothing loads classes on demand yet")]
 pub fn parse(args: &[String]) -> Result<Options, String> {
-    let _ = args;
-    todo!()
+    let [_, mode, config, flags @ ..] = args else {
+        return Err(USAGE.to_owned());
+    };
+    if !matches!(mode.as_str(), "replay" | "record") {
+        return Err(USAGE.to_owned());
+    }
+    let (mut class_url, mut recordings, mut max_classes) = (None, None, None);
+    let mut flags = flags.iter();
+    while let Some(flag) = flags.next() {
+        if !flag.starts_with('-') {
+            return Err(USAGE.to_owned());
+        }
+        let slot = match flag.as_str() {
+            "--class-url" => &mut class_url,
+            "--recordings" => &mut recordings,
+            "--max-classes" => &mut max_classes,
+            _ => return Err(usage_error(format!("unknown option {flag}"))),
+        };
+        let value = flags
+            .next()
+            .ok_or_else(|| usage_error(format!("{flag} needs a value")))?;
+        if slot.replace(value).is_some() {
+            return Err(usage_error(format!("{flag} is given twice")));
+        }
+    }
+    let mode = if mode == "replay" {
+        for (flag, given) in [
+            ("--class-url", class_url.is_some()),
+            ("--max-classes", max_classes.is_some()),
+        ] {
+            if given {
+                return Err(usage_error(format!("{flag} is for record mode")));
+            }
+        }
+        Mode::Replay {
+            recordings: recordings.map(PathBuf::from),
+        }
+    } else {
+        let service = match (class_url, recordings) {
+            (Some(url), Some(recordings)) => {
+                let url = Template::parse(url)
+                    .map_err(|reason| usage_error(format!("--class-url: {reason}")))?;
+                let max_classes = match max_classes {
+                    None => DEFAULT_MAX_CLASSES,
+                    Some(n) => n.parse().map_err(|_| {
+                        usage_error(format!("--max-classes: {n:?} is not a number"))
+                    })?,
+                };
+                // With none, every lookup would fail.
+                if max_classes == 0 {
+                    return Err(usage_error("--max-classes must be at least 1"));
+                }
+                Some(Service {
+                    url,
+                    recordings: recordings.into(),
+                    max_classes,
+                })
+            }
+            (Some(_), None) => return Err(usage_error("--class-url needs --recordings")),
+            (None, Some(_)) => return Err(usage_error("--recordings needs --class-url")),
+            (None, None) if max_classes.is_some() => {
+                return Err(usage_error("--max-classes needs --class-url"));
+            }
+            (None, None) => None,
+        };
+        Mode::Record { service }
+    };
+    Ok(Options {
+        config: config.into(),
+        mode,
+    })
+}
+
+fn usage_error(reason: impl std::fmt::Display) -> String {
+    format!("pseudogress: {reason}\n{USAGE}")
 }
 
 #[cfg(test)]
@@ -88,7 +155,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn the_modes_without_flags_take_a_configuration_as_they_always_did() {
         let options = parsed(&["replay", "pseudogress.toml"]);
         assert_eq!(options.config, PathBuf::from("pseudogress.toml"));
@@ -100,7 +166,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn replay_takes_the_directory_of_recordings() {
         let options = parsed(&["replay", "c.toml", "--recordings", "recordings/dir"]);
         let Mode::Replay {
@@ -113,7 +178,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn record_takes_a_class_service_and_the_directory_of_recordings() {
         let service = service(&[
             "record",
@@ -134,7 +198,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn record_takes_the_most_classes_that_the_service_may_add() {
         let service = service(&[
             "record",
@@ -150,7 +213,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn the_flags_come_in_any_order() {
         let service = service(&[
             "record",
@@ -167,7 +229,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn arguments_that_are_not_a_mode_and_a_configuration_get_the_usage_only() {
         for arguments in [
             vec![],
@@ -190,7 +251,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn an_unknown_option_is_refused() {
         assert_refused(
             &["replay", "c.toml", "--verbose"],
@@ -205,7 +265,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn an_option_needs_its_value() {
         assert_refused(
             &["replay", "c.toml", "--recordings"],
@@ -222,7 +281,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn an_option_is_given_once() {
         assert_refused(
             &["replay", "c.toml", "--recordings", "a", "--recordings", "b"],
@@ -259,7 +317,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn the_class_url_and_the_most_classes_are_for_record_mode_only() {
         assert_refused(
             &["replay", "c.toml", "--class-url", URL],
@@ -279,7 +336,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn the_class_url_needs_the_directory_of_recordings() {
         assert_refused(
             &["record", "c.toml", "--class-url", URL],
@@ -288,7 +344,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn in_record_mode_the_directory_of_recordings_needs_the_class_url() {
         assert_refused(
             &["record", "c.toml", "--recordings", "r"],
@@ -297,7 +352,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn the_most_classes_need_the_class_url() {
         assert_refused(
             &["record", "c.toml", "--max-classes", "3"],
@@ -306,7 +360,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn the_most_classes_is_a_number() {
         for value in ["many", "-1", "", "1.5", "0x10", "99999999999999999999999"] {
             let error = refused(&[
@@ -326,7 +379,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn the_most_classes_is_at_least_1_as_none_would_fail_every_lookup() {
         let error = refused(&[
             "record",
@@ -346,7 +398,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "xfail: loading classes on demand is not implemented yet"]
     fn the_class_url_is_checked_when_the_command_line_is() {
         for (url, reason) in [
             ("https://classes.internal/{database}", "http://"),

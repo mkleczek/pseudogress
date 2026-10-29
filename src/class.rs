@@ -22,10 +22,14 @@ pub type Classes = Arc<Registry<Class>>;
 
 impl Class {
     /// The classes of `configs`, in their order, with room for `room` more.
-    #[allow(dead_code, reason = "nothing loads classes on demand yet")]
     pub fn registry(configs: &[config::Class], room: usize) -> Classes {
-        let _ = (configs, room);
-        todo!()
+        let classes = Registry::with_capacity(configs.len() + room);
+        for config in configs {
+            classes
+                .push(Class::new(config))
+                .expect("there is room for the given classes");
+        }
+        Arc::new(classes)
     }
 
     pub fn new(config: &config::Class) -> Self {

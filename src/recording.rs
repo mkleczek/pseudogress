@@ -201,7 +201,7 @@ pub fn write(path: &Path, entries: &[Entry]) -> Result<(), String> {
 }
 
 /// Writes lines next to `path`, where they wait to replace it.
-fn write_partial(path: &Path, lines: &[String]) -> Result<PathBuf, String> {
+pub(crate) fn write_partial(path: &Path, lines: &[String]) -> Result<PathBuf, String> {
     let error = |e: std::io::Error| format!("{}: {e}", path.display());
     let partial = path.with_extension("partial");
     let mut out = BufWriter::new(fs::File::create(&partial).map_err(error)?);
@@ -216,7 +216,7 @@ fn write_partial(path: &Path, lines: &[String]) -> Result<PathBuf, String> {
     Ok(partial)
 }
 
-fn rename(partial: &Path, path: &Path) -> Result<(), String> {
+pub(crate) fn rename(partial: &Path, path: &Path) -> Result<(), String> {
     fs::rename(partial, path).map_err(|e| format!("{}: {e}", path.display()))
 }
 

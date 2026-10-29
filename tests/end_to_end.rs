@@ -128,7 +128,6 @@ upstream = {{ host = "127.0.0.1", port = {postgres_port}, user = "postgres", dat
 /// Records through a class service and replays from the recordings: the
 /// service gives the class of `svc-*` databases, which the configuration lacks.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 async fn replays_what_a_class_service_gave_classes_to_record() {
     if Command::new("initdb").arg("--version").output().is_err() {
         eprintln!("initdb is not on PATH: skipping the end-to-end test (run it in nix-shell)");
@@ -254,7 +253,6 @@ async fn class_service(postgres_port: u16) -> (u16, Arc<AtomicUsize>) {
 }
 
 #[test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 fn replay_with_a_directory_of_recordings_needs_its_classes_file() {
     let dir = std::env::temp_dir().join(format!("pseudogress-e2e-nofile-{}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
@@ -272,7 +270,6 @@ fn replay_with_a_directory_of_recordings_needs_its_classes_file() {
 }
 
 #[test]
-#[ignore = "xfail: loading classes on demand is not implemented yet"]
 fn flags_that_do_not_go_with_the_mode_are_usage_errors() {
     for (arguments, reason) in [
         (
