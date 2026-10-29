@@ -21,6 +21,13 @@ pub struct Class {
 pub type Classes = Arc<Registry<Class>>;
 
 impl Class {
+    /// The classes of `configs`, in their order, with room for `room` more.
+    #[allow(dead_code, reason = "nothing loads classes on demand yet")]
+    pub fn registry(configs: &[config::Class], room: usize) -> Classes {
+        let _ = (configs, room);
+        todo!()
+    }
+
     pub fn new(config: &config::Class) -> Self {
         Class {
             name: config.name.clone(),

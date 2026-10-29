@@ -242,6 +242,34 @@ pub struct Faults {
     pub statement_timeout: Option<Duration>,
 }
 
+/// The file of the classes that record mode took from a class service, in the
+/// directory of the recordings: `[[class]]` tables like the configuration's,
+/// with their recordings relative to the directory.
+#[allow(dead_code, reason = "nothing loads classes on demand yet")]
+pub const CLASSES_FILE: &str = "classes.toml";
+
+/// Appends the classes of `dir/classes.toml` to the configuration's, for
+/// replay mode, with the recordings resolved against `dir`. The classes get
+/// the checks of the configuration's: a name that an earlier class has is
+/// an error. The file must exist.
+#[allow(dead_code, reason = "nothing loads classes on demand yet")]
+pub fn load_classes(config: &mut Config, dir: &Path) -> Result<(), String> {
+    let _ = (config, dir);
+    todo!()
+}
+
+/// Writes `dir/classes.toml`, for replay mode: the classes sorted by name,
+/// with their recordings relative to `dir`. The file is written aside and
+/// renamed, as the recordings are. Without classes it is an empty, valid file.
+#[allow(dead_code, reason = "nothing loads classes on demand yet")]
+pub fn write_classes<'a>(
+    dir: &Path,
+    classes: impl IntoIterator<Item = &'a Class>,
+) -> Result<(), String> {
+    let _ = (dir, classes);
+    todo!()
+}
+
 pub fn load(path: &Path) -> Result<Config, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let config: Config = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;

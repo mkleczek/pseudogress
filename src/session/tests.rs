@@ -236,6 +236,7 @@ async fn start_with(classes: Vec<config::Class>, tls: Option<Tls>) -> Server {
         secret: SECRET.into(),
         tls,
         connector: Answering { exec: exec.clone() },
+        loader: None,
     });
     // Bound before `serve` gets it, so that no other test can take the port.
     let listener = listen(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();

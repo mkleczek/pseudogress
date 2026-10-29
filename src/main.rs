@@ -8,7 +8,9 @@ mod auth;
 mod class;
 mod config;
 mod databases;
+mod loader;
 mod metrics;
+mod options;
 mod record;
 mod recording;
 mod registry;
@@ -135,6 +137,7 @@ fn share<C>(
         secret: config.secret.clone(),
         tls,
         connector,
+        loader: None,
     })
 }
 

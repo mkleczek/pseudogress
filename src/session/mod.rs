@@ -20,7 +20,7 @@ use pgwire::messages::PgWireFrontendMessage;
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::{net::TcpListener, task::JoinSet};
 
-use crate::{auth::Verifiers, class::Classes, databases::Databases, tls::Tls};
+use crate::{auth::Verifiers, class::Classes, databases::Databases, loader::Loader, tls::Tls};
 
 mod batches;
 mod cancel;
@@ -80,6 +80,10 @@ pub struct Shared<C> {
     pub secret: String,
     pub tls: Option<Tls>,
     pub connector: C,
+    /// Record mode with a class service: finds the class of a database that
+    /// no class matches.
+    #[allow(dead_code, reason = "nothing loads classes on demand yet")]
+    pub loader: Option<Loader>,
 }
 
 /// Binds an address for PostgreSQL connections, with an accept queue long
