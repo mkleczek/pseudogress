@@ -288,7 +288,7 @@ fn try_load(entries: &[Entry], class: &str) -> Result<Loaded, String> {
         path.display()
     ))
     .unwrap();
-    let classes: Classes = config.classes.iter().map(Class::new).collect();
+    let classes: Classes = Arc::new(config.classes.iter().map(Class::new).collect());
     let replay = Replay::load(&config, classes.clone());
     fs::remove_dir_all(&dir).unwrap();
     Ok(Loaded {

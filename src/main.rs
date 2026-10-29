@@ -11,6 +11,7 @@ mod databases;
 mod metrics;
 mod record;
 mod recording;
+mod registry;
 mod replay;
 mod session;
 mod timer;
@@ -59,7 +60,7 @@ fn main() -> ExitCode {
 }
 
 async fn run(mode: &str, config: Config) -> Result<(), String> {
-    let classes: Classes = config.classes.iter().map(Class::new).collect();
+    let classes: Classes = Arc::new(config.classes.iter().map(Class::new).collect());
     let databases = Arc::new(Databases::new(&config.classes));
     if let Some(address) = config.admin {
         let listener = TcpListener::bind(address)

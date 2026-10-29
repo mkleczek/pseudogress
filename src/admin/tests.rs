@@ -32,7 +32,7 @@ struct Admin {
 /// Starts the admin API on a free port.
 async fn start() -> Admin {
     let config: Config = toml::from_str(CONFIG).unwrap();
-    let classes: Classes = config.classes.iter().map(Class::new).collect();
+    let classes: Classes = Arc::new(config.classes.iter().map(Class::new).collect());
     let databases = Arc::new(Databases::new(&config.classes));
     // Bound before `serve` gets it, so that no other test can take the port.
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

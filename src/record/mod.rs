@@ -11,7 +11,7 @@ use std::{
     fs, io,
     mem::take,
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
 };
 
@@ -25,8 +25,9 @@ use pgwire::messages::{
 };
 
 use crate::{
-    config::{Config, Upstream},
+    config::{self, Config, Upstream},
     recording::{self, Entry},
+    registry::Registry,
     session::{Backend, Connector},
     wire,
 };
@@ -40,8 +41,11 @@ mod sink;
 mod tests;
 
 pub struct Record {
-    /// In configuration order, like the classes.
-    classes: Vec<Arc<Target>>,
+    /// By class index, like the classes.
+    classes: Registry<Arc<Target>>,
+    /// The class that writes each of the recordings: two on one file would
+    /// write over each other. Held while adding.
+    recordings: Mutex<HashMap<PathBuf, String>>,
 }
 
 /// A class's upstream, and what its connections recorded.
@@ -54,39 +58,60 @@ struct Target {
 impl Record {
     /// Every class needs an upstream.
     pub fn new(config: &Config) -> Result<Self, String> {
+        Self::with_room(config, 0)
+    }
+
+    /// With room for `room` classes to be added after the configuration's.
+    pub fn with_room(config: &Config, room: usize) -> Result<Self, String> {
+        let record = Record {
+            classes: Registry::with_capacity(config.classes.len() + room),
+            recordings: Mutex::default(),
+        };
+        for class in &config.classes {
+            record.add(class)?;
+        }
+        Ok(record)
+    }
+
+    /// Adds the target of a class after the others, and returns its index.
+    /// Nothing is added on an error, so add it first: the class and its rule
+    /// in `Databases` follow at the same index, the rule last, since that
+    /// makes the class reachable.
+    pub fn add(&self, class: &config::Class) -> Result<usize, String> {
+        let mut recordings = self
+            .recordings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         // Every class writes its recording at shutdown: two on one file would
         // write over each other.
-        let mut recordings = HashMap::new();
-        for class in &config.classes {
-            if let Some(other) = recordings.insert(&class.recording, &class.name) {
-                return Err(format!(
-                    "class {}: recording {} is also the recording of class {other}",
-                    class.name,
-                    class.recording.display()
-                ));
-            }
+        if let Some(other) = recordings.get(&class.recording) {
+            return Err(format!(
+                "class {}: recording {} is also the recording of class {other}",
+                class.name,
+                class.recording.display()
+            ));
         }
-        let classes = config
+        let upstream = class
+            .upstream
+            .as_ref()
+            .ok_or_else(|| format!("class {}: record mode needs an upstream", class.name))?;
+        let target = Arc::new(Target {
+            upstream: Upstream {
+                host: upstream.host.clone(),
+                port: upstream.port,
+                user: upstream.user.clone(),
+                password: upstream.password.clone(),
+                database: upstream.database.clone(),
+            },
+            recording: class.recording.clone(),
+            sink: Sink::new(class.ignore_parameters.clone()),
+        });
+        let index = self
             .classes
-            .iter()
-            .map(|class| {
-                let upstream = class.upstream.as_ref().ok_or_else(|| {
-                    format!("class {}: record mode needs an upstream", class.name)
-                })?;
-                Ok(Arc::new(Target {
-                    upstream: Upstream {
-                        host: upstream.host.clone(),
-                        port: upstream.port,
-                        user: upstream.user.clone(),
-                        password: upstream.password.clone(),
-                        database: upstream.database.clone(),
-                    },
-                    recording: class.recording.clone(),
-                    sink: Sink::new(class.ignore_parameters.clone()),
-                }))
-            })
-            .collect::<Result<_, String>>()?;
-        Ok(Record { classes })
+            .push(target)
+            .ok_or_else(|| format!("class {}: there is no room for another class", class.name))?;
+        recordings.insert(class.recording.clone(), class.name.clone());
+        Ok(index)
     }
 
     /// Writes every class's recording. Called once, at shutdown.

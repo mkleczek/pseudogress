@@ -33,7 +33,7 @@ const NAMES: [&str; 11] = [
     "pseudogress_processing_seconds",
 ];
 
-fn load_classes(config: &str) -> Vec<Class> {
+fn load_classes(config: &str) -> Registry<Class> {
     let config: Config = toml::from_str(config).unwrap();
     config.classes.iter().map(Class::new).collect()
 }

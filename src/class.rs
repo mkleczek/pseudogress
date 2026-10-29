@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 
-use crate::{config, metrics::ClassMetrics};
+use crate::{config, metrics::ClassMetrics, registry::Registry};
 
 pub struct Class {
     pub name: String,
@@ -16,9 +16,9 @@ pub struct Class {
     pub metrics: ClassMetrics,
 }
 
-/// Every class, in configuration order. A database's class is an index into
-/// it.
-pub type Classes = Arc<[Class]>;
+/// Every class: the configuration's in its order, then the ones added. A
+/// database's class is an index into it.
+pub type Classes = Arc<Registry<Class>>;
 
 impl Class {
     pub fn new(config: &config::Class) -> Self {

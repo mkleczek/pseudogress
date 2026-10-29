@@ -14,7 +14,7 @@ use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
-use crate::config;
+use crate::{config, registry::Registry};
 
 mod pattern;
 #[cfg(test)]
@@ -28,7 +28,8 @@ const SHARDS: usize = 64;
 /// connections are made and dropped thousands of times per second, and each
 /// one takes the lock of its database's shard only.
 pub struct Databases {
-    classes: Vec<Rule>,
+    /// In matching order, like the classes.
+    classes: Registry<Rule>,
     shards: Box<[Arc<Shard>]>,
 }
 
@@ -38,6 +39,16 @@ struct Rule {
     pattern: Pattern,
     /// `usize::MAX` without a limit.
     max_connections: usize,
+}
+
+impl Rule {
+    fn new(class: &config::Class) -> Self {
+        Rule {
+            name: class.name.clone(),
+            pattern: Pattern::new(&class.databases),
+            max_connections: class.max_connections.map_or(usize::MAX, |n| n as usize),
+        }
+    }
 }
 
 /// Aligned to a cache line, so that shards used by different cores do not
@@ -150,17 +161,30 @@ pub struct DatabaseInfo {
 
 impl Databases {
     pub fn new(classes: &[config::Class]) -> Self {
-        Databases {
-            classes: classes
-                .iter()
-                .map(|class| Rule {
-                    name: class.name.clone(),
-                    pattern: Pattern::new(&class.databases),
-                    max_connections: class.max_connections.map_or(usize::MAX, |n| n as usize),
-                })
-                .collect(),
+        Self::with_room(classes, 0)
+    }
+
+    /// With room for `room` classes to be added after the given ones.
+    pub fn with_room(classes: &[config::Class], room: usize) -> Self {
+        let databases = Databases {
+            classes: Registry::with_capacity(classes.len() + room),
             shards: (0..SHARDS).map(|_| Arc::default()).collect(),
+        };
+        for class in classes {
+            databases
+                .add(class)
+                .expect("there is room for the given classes");
         }
+        databases
+    }
+
+    /// Makes the class match databases after the others' patterns, and
+    /// returns its index. `None` when there is no room.
+    ///
+    /// The class's `Class` and record target must exist already, at the same
+    /// index: `connect` may pick it as soon as this returns.
+    pub fn add(&self, class: &config::Class) -> Option<usize> {
+        self.classes.push(Rule::new(class))
     }
 
     pub fn connect(&self, database: &str) -> Result<Connection, ConnectError> {

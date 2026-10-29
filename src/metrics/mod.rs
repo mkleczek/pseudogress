@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use crate::class::Class;
+use crate::{class::Class, registry::Registry};
 
 #[cfg(test)]
 mod tests;
@@ -57,7 +57,7 @@ impl Histogram {
 }
 
 /// Appends the metrics of every class to `out`.
-pub fn render(classes: &[Class], out: &mut String) {
+pub fn render(classes: &Registry<Class>, out: &mut String) {
     family(
         out,
         classes,
@@ -157,14 +157,14 @@ pub fn render(classes: &[Class], out: &mut String) {
 /// A counter or gauge, with a sample per class.
 fn family<T: Display>(
     out: &mut String,
-    classes: &[Class],
+    classes: &Registry<Class>,
     name: &str,
     kind: &str,
     help: &str,
     value: impl Fn(&ClassMetrics) -> T,
 ) {
     header(out, name, kind, help);
-    for class in classes {
+    for class in classes.iter() {
         sample_start(out, name, "", &class.name);
         let _ = writeln!(out, "}} {}", value(&class.metrics));
     }
@@ -172,13 +172,13 @@ fn family<T: Display>(
 
 fn histogram(
     out: &mut String,
-    classes: &[Class],
+    classes: &Registry<Class>,
     name: &str,
     help: &str,
     value: impl Fn(&ClassMetrics) -> &Histogram,
 ) {
     header(out, name, "histogram", help);
-    for class in classes {
+    for class in classes.iter() {
         let histogram = value(&class.metrics);
         let (finite, [overflow]) = histogram.buckets.split_at(31) else {
             unreachable!("32 buckets")

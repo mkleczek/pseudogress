@@ -230,7 +230,7 @@ async fn start_with(classes: Vec<config::Class>, tls: Option<Tls>) -> Server {
     let _ = rlimit::increase_nofile_limit(u64::MAX);
     let exec = Arc::new(AtomicU64::new(0));
     let shared = Arc::new(Shared {
-        classes: classes.iter().map(Class::new).collect(),
+        classes: Arc::new(classes.iter().map(Class::new).collect()),
         databases: Arc::new(Databases::new(&classes)),
         verifiers: Verifiers::new(),
         secret: SECRET.into(),

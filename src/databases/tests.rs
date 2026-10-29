@@ -508,3 +508,73 @@ fn concurrent_connects_never_exceed_max_connections() {
         assert_eq!(databases.info(&format!("db-{i}")), None);
     }
 }
+
+#[test]
+fn an_added_class_gets_the_next_index_and_matches_after_the_others() {
+    let first = class("first", "a-*", None);
+    let databases = Databases::with_room(std::slice::from_ref(&first), 2);
+    assert!(!connects(&databases, "b-1"));
+
+    assert_eq!(databases.add(&class("second", "b-*", None)), Some(1));
+    assert_eq!(databases.add(&class("rest", "*", None)), Some(2));
+
+    assert_eq!(connect(&databases, "a-1").class(), 0);
+    assert_eq!(connect(&databases, "b-1").class(), 1);
+    // The first class that matches wins, whenever it was added.
+    assert_eq!(connect(&databases, "c-1").class(), 2);
+}
+
+#[test]
+fn classes_are_added_only_up_to_the_room() {
+    let first = class("first", "a-*", None);
+    let none = Databases::new(std::slice::from_ref(&first));
+    assert_eq!(none.add(&class("second", "b-*", None)), None);
+    assert!(!connects(&none, "b-1"));
+
+    let one = Databases::with_room(std::slice::from_ref(&first), 1);
+    assert_eq!(one.add(&class("second", "b-*", None)), Some(1));
+    assert_eq!(one.add(&class("third", "c-*", None)), None);
+    assert!(connects(&one, "b-1"));
+    assert!(!connects(&one, "c-1"));
+}
+
+#[test]
+fn an_added_class_is_found_by_its_name_and_limits_its_connections() {
+    let databases = Databases::with_room(&[class("first", "a-*", None)], 1);
+    databases.add(&class("second", "b-*", Some(1)));
+
+    let _open = connect(&databases, "b-1");
+    assert!(!connects(&databases, "b-1"));
+    assert_eq!(databases.info("b-1").unwrap().class, "second");
+    assert_eq!(databases.terminate(&class_target("second", 1.0)), 1);
+}
+
+#[test]
+fn connects_while_classes_are_added_get_the_class_that_matches() {
+    const ROOM: usize = 50;
+    let databases = Databases::with_room(&[], ROOM);
+    thread::scope(|scope| {
+        for _ in 0..4 {
+            scope.spawn(|| {
+                for index in 0..ROOM {
+                    let name = format!("db-{index}");
+                    // Matches once the class is added.
+                    let connection = loop {
+                        match databases.connect(&name) {
+                            Ok(connection) => break connection,
+                            Err(error) => {
+                                assert_eq!(error, ConnectError::NoSuchDatabase);
+                                thread::yield_now();
+                            }
+                        }
+                    };
+                    assert_eq!(connection.class(), index);
+                }
+            });
+        }
+        for index in 0..ROOM {
+            let added = class(&format!("class-{index}"), &format!("db-{index}"), None);
+            assert_eq!(databases.add(&added), Some(index));
+        }
+    });
+}

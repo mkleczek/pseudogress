@@ -1046,3 +1046,128 @@ fn two_classes_cannot_record_to_the_same_file() {
     assert!(error.contains("first"), "{error}");
     assert!(error.contains("shared.jsonl"), "{error}");
 }
+
+/// A class with an upstream that is never connected to, unless it has none.
+fn class(name: &str, recording: &str, upstream: bool) -> config::Class {
+    let upstream = if upstream {
+        r#"upstream = { host = "localhost", port = 5432, user = "postgres", database = "{database}" }"#
+    } else {
+        ""
+    };
+    toml::from_str(&format!(
+        r#"
+        name = "{name}"
+        databases = "{name}-*"
+        users = ["client"]
+        recording = "{recording}"
+        {upstream}
+        "#
+    ))
+    .unwrap()
+}
+
+/// A record of one class, `first`, with room for more.
+fn record_with_room(room: usize) -> Record {
+    let config: Config = toml::from_str(
+        r#"
+        listen = []
+        [[class]]
+        name = "first"
+        databases = "first-*"
+        users = ["client"]
+        recording = "first.jsonl"
+        upstream = { host = "localhost", port = 5432, user = "postgres", database = "{database}" }
+        "#,
+    )
+    .unwrap();
+    Record::with_room(&config, room).unwrap()
+}
+
+#[test]
+fn an_added_class_gets_the_next_index_and_a_target_of_its_own() {
+    let record = record_with_room(2);
+
+    assert_eq!(record.add(&class("second", "second.jsonl", true)), Ok(1));
+    assert_eq!(record.add(&class("third", "third.jsonl", true)), Ok(2));
+
+    let recordings: Vec<_> = record.classes.iter().map(|t| t.recording.clone()).collect();
+    assert_eq!(
+        recordings,
+        ["first.jsonl", "second.jsonl", "third.jsonl"].map(PathBuf::from)
+    );
+}
+
+#[test]
+fn an_added_class_cannot_record_to_the_file_of_another_and_leaves_nothing() {
+    let record = record_with_room(2);
+
+    let error = record
+        .add(&class("second", "first.jsonl", true))
+        .unwrap_err();
+
+    assert!(error.contains("second"), "{error}");
+    assert!(error.contains("first"), "{error}");
+    assert!(error.contains("first.jsonl"), "{error}");
+    assert_eq!(record.classes.iter().count(), 1);
+    // The failed class took no index and no recording.
+    assert_eq!(record.add(&class("second", "second.jsonl", true)), Ok(1));
+}
+
+#[test]
+fn an_added_class_needs_an_upstream_and_leaves_nothing() {
+    let record = record_with_room(2);
+
+    let error = record
+        .add(&class("second", "second.jsonl", false))
+        .unwrap_err();
+
+    assert!(error.contains("second"), "{error}");
+    assert_eq!(record.classes.iter().count(), 1);
+    assert_eq!(record.add(&class("second", "second.jsonl", true)), Ok(1));
+}
+
+#[test]
+fn classes_are_added_only_up_to_the_room() {
+    let none = record_with_room(0);
+    assert!(none.add(&class("second", "second.jsonl", true)).is_err());
+
+    let one = record_with_room(1);
+    assert_eq!(one.add(&class("second", "second.jsonl", true)), Ok(1));
+    let error = one.add(&class("third", "third.jsonl", true)).unwrap_err();
+    assert!(error.contains("third"), "{error}");
+    assert_eq!(one.classes.iter().count(), 2);
+    // A class that did not fit did not take its recording either.
+    assert_eq!(
+        one.add(&class("fourth", "third.jsonl", true)).unwrap_err(),
+        "class fourth: there is no room for another class"
+    );
+}
+
+#[tokio::test]
+async fn a_class_added_later_records_to_its_own_file() {
+    let Some(cluster) = Cluster::start(None) else {
+        return;
+    };
+    let record = record_with_room(1);
+    let second: config::Class = toml::from_str(&format!(
+        r#"
+        name = "second"
+        databases = "second-*"
+        users = ["client"]
+        recording = "{}"
+        upstream = {{ host = "127.0.0.1", port = {}, user = "postgres", database = "postgres" }}
+        "#,
+        cluster.dir.join("second.jsonl").display(),
+        cluster.port
+    ))
+    .unwrap();
+    assert_eq!(record.add(&second), Ok(1));
+
+    let mut recorder = record.connect(1, "second-1", "client").await.unwrap();
+    let out = send(&mut recorder, vec![query("select 1")]).await;
+    record.write().unwrap();
+
+    assert_eq!(tags(&out), "TDCZ");
+    let entries = recording::read(&cluster.dir.join("second.jsonl")).unwrap();
+    assert_eq!(entries.len(), 2);
+}
